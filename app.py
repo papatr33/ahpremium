@@ -21,6 +21,21 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# --- Nippon Colors Palette ---
+NIPPON_COLORS = [
+    '#9E3D3F', # Suoh
+    '#2A5CAA', # Ruri
+    '#838B0D', # Koke
+    '#FFB11B', # Yamabuki
+    '#5B3131', # Ebi-cha
+    '#005CAF', # Rurikon
+    '#C1328E', # Tsutsuji
+    '#6A8372', # Byakuroku
+    '#E49E61', # Araigaki
+    '#4D4398', # Kon-kikyo
+    '#7DB9DE', # Wasurenagusa
+]
+
 # --- Data Config ---
 AH_PAIRS = {
     "Hua Hong Semiconductor": {"A": "688347.SS", "H": "1347.HK"},
@@ -96,10 +111,24 @@ def fetch_pair_data(a_ticker, h_ticker, start_date, end_date):
 
     return data
 
+@st.cache_data(ttl=600)
+def get_latest_spreads():
+    """Sequential fetch of just the latest data to determine current spreads (Stable)."""
+    results = []
+    start_date = date.today() - timedelta(days=10)
+    end_date = date.today() + timedelta(days=1)
+    
+    for name, tickers in AH_PAIRS.items():
+        df = fetch_pair_data(tickers['A'], tickers['H'], start_date, end_date)
+        if not df.empty:
+            df['A_USD'] = df['A_Local'] / df['USDCNH']
+            df['H_USD'] = df['H_Local'] / df['USDHKD']
+            current_spread = ( (df['A_USD'].iloc[-1] / df['H_USD'].iloc[-1]) - 1 ) * 100
+            results.append({"Pair": name, "Current Spread (%)": current_spread})
+    
+    return pd.DataFrame(results)
+
 def run_backtest(df, long_entry, long_exit, short_entry, short_exit, trade_size=1_000_000, enable_short=False):
-    """
-    Backtest with Manual Thresholds.
-    """
     df = df.copy()
     df['A_USD'] = df['A_Local'] / df['USDCNH']
     df['H_USD'] = df['H_Local'] / df['USDHKD']
@@ -108,12 +137,9 @@ def run_backtest(df, long_entry, long_exit, short_entry, short_exit, trade_size=
     
     position = 0 
     cumulative_pnl = [0.0] 
-    
-    # Tracking for Trade Stats
     events = []
     closed_trades = []
     
-    # Trade State
     shares_a = 0.0
     shares_h = 0.0
     entry_date = None
@@ -123,10 +149,8 @@ def run_backtest(df, long_entry, long_exit, short_entry, short_exit, trade_size=
         row = df.iloc[i]
         today_date = df.index[i]
         spread_val = row['Spread_Pct']
-        
         daily_pnl = 0.0
         
-        # 1. Mark-to-Market PnL
         if i > 0 and position != 0:
             prev_row = df.iloc[i-1]
             delta_a = row['A_USD'] - prev_row['A_USD']
@@ -145,66 +169,32 @@ def run_backtest(df, long_entry, long_exit, short_entry, short_exit, trade_size=
 
         cumulative_pnl.append(cumulative_pnl[-1] + daily_pnl)
             
-        # 2. Trade Logic
         if position == 0:
-            # Check LONG Entry
             if spread_val < long_entry:
                 position = 1
                 shares_a = trade_size / row['A_USD']
                 shares_h = trade_size / row['H_USD']
                 entry_date = today_date
-                current_trade_pnl = 0.0 # Reset for new trade
-                
-                events.append({
-                    "Date": today_date, "Type": "Entry Long", "Price": spread_val, 
-                    "Shares_A": shares_a, "Shares_H": shares_h
-                })
-            
-            # Check SHORT Entry
+                current_trade_pnl = 0.0
+                events.append({"Date": today_date, "Type": "Entry Long", "Price": spread_val, "Shares_A": shares_a, "Shares_H": shares_h})
             elif enable_short and (spread_val > short_entry):
                 position = -1
                 shares_a = trade_size / row['A_USD']
                 shares_h = trade_size / row['H_USD']
                 entry_date = today_date
                 current_trade_pnl = 0.0
-                
-                events.append({
-                    "Date": today_date, "Type": "Entry Short", "Price": spread_val, 
-                    "Shares_A": shares_a, "Shares_H": shares_h
-                })
+                events.append({"Date": today_date, "Type": "Entry Short", "Price": spread_val, "Shares_A": shares_a, "Shares_H": shares_h})
         
         elif position == 1:
-            # Check LONG Exit
             if spread_val > long_exit:
-                events.append({
-                    "Date": today_date, "Type": "Exit Long", "Price": spread_val, 
-                    "Shares_A": 0, "Shares_H": 0
-                })
-                # Log Closed Trade
-                closed_trades.append({
-                    "Entry Date": entry_date,
-                    "Exit Date": today_date,
-                    "Duration": (today_date - entry_date).days,
-                    "PnL": current_trade_pnl,
-                    "Type": "Long"
-                })
+                events.append({"Date": today_date, "Type": "Exit Long", "Price": spread_val, "Shares_A": 0, "Shares_H": 0})
+                closed_trades.append({"Entry Date": entry_date, "Exit Date": today_date, "Duration": (today_date - entry_date).days, "PnL": current_trade_pnl, "Type": "Long"})
                 position = 0; shares_a = 0; shares_h = 0; entry_date = None
                 
         elif position == -1:
-            # Check SHORT Exit
             if spread_val < short_exit:
-                events.append({
-                    "Date": today_date, "Type": "Exit Short", "Price": spread_val, 
-                    "Shares_A": 0, "Shares_H": 0
-                })
-                # Log Closed Trade
-                closed_trades.append({
-                    "Entry Date": entry_date,
-                    "Exit Date": today_date,
-                    "Duration": (today_date - entry_date).days,
-                    "PnL": current_trade_pnl,
-                    "Type": "Short"
-                })
+                events.append({"Date": today_date, "Type": "Exit Short", "Price": spread_val, "Shares_A": 0, "Shares_H": 0})
+                closed_trades.append({"Entry Date": entry_date, "Exit Date": today_date, "Duration": (today_date - entry_date).days, "PnL": current_trade_pnl, "Type": "Short"})
                 position = 0; shares_a = 0; shares_h = 0; entry_date = None
     
     df['Net_PnL'] = cumulative_pnl[1:]
@@ -229,17 +219,148 @@ short_exit = st.sidebar.number_input("Exit Short if Spread < (%)", value=120.0, 
 st.sidebar.divider()
 st.sidebar.subheader("General Settings")
 trade_size = 1_000_000
-start_date_input = st.sidebar.date_input("Start Date", date(2016, 1, 1))
+start_date_input = st.sidebar.date_input("Start Date", date(2021, 1, 1))
 
 # --- Main App ---
 st.title(f"📉 AH Premium: Fixed Threshold Backtest")
 
-tab1, tab2, tab3 = st.tabs(["Single Pair Analysis", "Batch Strategy Summary", "Annual Stats Analysis"])
+tab1, tab2 = st.tabs(["Annual Stats Analysis", "Single Pair Analysis"])
 
 # ==========================================
-# TAB 1: Single Pair (Visual Dashboard)
+# TAB 1: Annual Stats Analysis
 # ==========================================
 with tab1:
+    st.subheader("📊 Annual Spread Statistics & Comparison")
+    
+    # 1. Loading Latest Spreads (Sequential - Stable)
+    with st.spinner("Scanning current spreads (Sequential Fetch)..."):
+        latest_spread_df = get_latest_spreads()
+    
+    # Filter Logic: Auto-select pairs with spread < 10%
+    default_selection = []
+    if not latest_spread_df.empty:
+        low_spread_pairs = latest_spread_df[latest_spread_df['Current Spread (%)'] < 10.0]
+        default_selection = low_spread_pairs['Pair'].tolist()
+        
+        if not default_selection:
+            default_selection = [list(AH_PAIRS.keys())[0]]
+            
+    # --- CHART SECTION ---
+    st.write("#### 1. Spread History Comparison")
+    st.caption("Default selection: Pairs with Current Spread < 10%")
+    
+    selected_chart_pairs = st.multiselect(
+        "Select Pairs to Compare", 
+        options=list(AH_PAIRS.keys()),
+        default=default_selection
+    )
+    
+    if selected_chart_pairs:
+        fig_comp = go.Figure()
+        
+        for i, p in enumerate(selected_chart_pairs):
+            p_tickers = AH_PAIRS[p]
+            df_p = fetch_pair_data(p_tickers['A'], p_tickers['H'], start_date_input, date.today())
+            if not df_p.empty:
+                df_p['A_USD'] = df_p['A_Local'] / df_p['USDCNH']
+                df_p['H_USD'] = df_p['H_Local'] / df_p['USDHKD']
+                spread_series = ( (df_p['A_USD'] / df_p['H_USD']) - 1 ) * 100
+                
+                # Assign Nippon Color cyclically
+                color_hex = NIPPON_COLORS[i % len(NIPPON_COLORS)]
+                fig_comp.add_trace(go.Scatter(x=df_p.index, y=spread_series, name=p, line=dict(color=color_hex, width=1.5)))
+        
+        fig_comp.update_layout(title="Historical Spread (%) Comparison", template="seaborn", hovermode="x unified", height=500)
+        st.plotly_chart(fig_comp, use_container_width=True)
+    
+    st.divider()
+
+    # --- CURRENT SPREAD TABLE ---
+    c_tbl, c_heat = st.columns([1, 2])
+    
+    with c_tbl:
+        st.write("#### 2. Current Spread Snapshot")
+        if not latest_spread_df.empty:
+            st.dataframe(
+                latest_spread_df.sort_values(by="Current Spread (%)").style.format({"Current Spread (%)": "{:.2f}%"}).background_gradient(cmap="RdYlGn_r"),
+                use_container_width=True,
+                height=600,
+                hide_index=True
+            )
+        else:
+            st.warning("Could not fetch latest spreads.")
+
+    # --- HEATMAP SECTION ---
+    with c_heat:
+        st.write("#### 3. Annual Heatmap Generator")
+        st.info("Click below to calculate historical stats.")
+        
+        if st.button("Generate Annual Stats Matrix"):
+            all_stats = []
+            progress_bar = st.progress(0)
+            pairs_items = list(AH_PAIRS.items())
+            
+            # Sequential Loop for Stability
+            for idx, (name, tickers) in enumerate(pairs_items):
+                df_curr = fetch_pair_data(tickers['A'], tickers['H'], start_date_input, date.today())
+                if not df_curr.empty:
+                    df_curr['A_USD'] = df_curr['A_Local'] / df_curr['USDCNH']
+                    df_curr['H_USD'] = df_curr['H_Local'] / df_curr['USDHKD']
+                    df_curr['Spread_Pct'] = ( (df_curr['A_USD'] / df_curr['H_USD']) - 1 ) * 100
+                    df_curr['Year'] = df_curr.index.year
+                    
+                    grouped = df_curr.groupby('Year')['Spread_Pct']
+                    annual_means = grouped.mean()
+                    annual_stds = grouped.std()
+                    annual_mins = grouped.min()
+                    annual_maxs = grouped.max()
+                    annual_diffs = annual_maxs - annual_mins
+                    
+                    unique_years = df_curr['Year'].unique()
+                    for y in unique_years:
+                        all_stats.append({
+                            "Pair": name, "Year": y,
+                            "Average Spread": annual_means.get(y, np.nan),
+                            "Spread Volatility": annual_stds.get(y, np.nan),
+                            "Min Spread": annual_mins.get(y, np.nan),
+                            "Max Spread": annual_maxs.get(y, np.nan),
+                            "Spread Range": annual_diffs.get(y, np.nan)
+                        })
+                progress_bar.progress((idx + 1) / len(pairs_items))
+            st.session_state['annual_stats'] = pd.DataFrame(all_stats)
+
+        if 'annual_stats' in st.session_state and not st.session_state['annual_stats'].empty:
+            df_stats = st.session_state['annual_stats']
+            metric_map = {
+                "Average Spread": "Average Spread",
+                "Spread Volatility": "Spread Volatility",
+                "Maximum Spread": "Max Spread",
+                "Minimum Spread": "Min Spread",
+                "Spread Range (Max - Min)": "Spread Range"
+            }
+            selected_metric_label = st.radio("Select Metric", list(metric_map.keys()), horizontal=True)
+            selected_metric_col = metric_map[selected_metric_label]
+
+            pivot_df = df_stats.pivot(index='Pair', columns='Year', values=selected_metric_col)
+            if not pivot_df.empty:
+                last_year = pivot_df.columns.max()
+                pivot_df = pivot_df.sort_values(by=last_year, ascending=False)
+            
+            # Formatting
+            if "Volatility" in selected_metric_label or "Range" in selected_metric_label:
+                fmt = "{:.2f}"; cmap = "Reds"
+            else:
+                fmt = "{:.1f}%"; cmap = "RdYlGn" if "Min" not in selected_metric_label else "RdYlGn_r"
+                
+            st.dataframe(
+                pivot_df.style.format(fmt, na_rep="").background_gradient(cmap=cmap, axis=None).highlight_null(props="background-color: white; color: black;"), 
+                use_container_width=True, height=600
+            )
+
+# ==========================================
+# TAB 2: Single Pair (Visual Dashboard)
+# ==========================================
+with tab2:
     col_sel, _ = st.columns([1, 2])
     with col_sel:
         selected_pair = st.selectbox("Select AH Pair", list(AH_PAIRS.keys()))
@@ -252,250 +373,52 @@ with tab1:
             st.error("No data found.")
         else:
             res_df, event_log, closed_trades = run_backtest(
-                raw_data, 
-                long_entry, long_exit, 
-                short_entry, short_exit, 
-                trade_size, enable_short
+                raw_data, long_entry, long_exit, short_entry, short_exit, trade_size, enable_short
             )
             
-            # Metrics
             total_pnl = res_df['Net_PnL'].iloc[-1]
             roll_max = res_df['Net_PnL'].cummax()
             dd_dollar = (res_df['Net_PnL'] - roll_max).min()
             
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Net Profit", f"${total_pnl:,.0f}")
-            c2.metric("Max Drawdown ($)", f"${dd_dollar:,.0f}", help="Maximum Peak-to-Trough Dollar Loss")
+            c2.metric("Max Drawdown ($)", f"${dd_dollar:,.0f}")
             c3.metric("Total Trades", len(closed_trades))
-            
             if not closed_trades.empty:
                 hit_rate = len(closed_trades[closed_trades['PnL'] > 0]) / len(closed_trades)
                 c4.metric("Hit Rate", f"{hit_rate:.1%}")
             else:
                 c4.metric("Hit Rate", "N/A")
 
-            # --- Plots ---
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.6, 0.4],
                                 subplot_titles=("AH Spread & Thresholds", "Cumulative PnL ($)"))
             
-            # 1. Spread Line
-            fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Spread_Pct'], name='Spread %', line=dict(color='#4c72b0')), row=1, col=1)
+            # Using Suoh Red for Spread line
+            fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Spread_Pct'], name='Spread %', line=dict(color='#9E3D3F')), row=1, col=1)
             
-            # 2. Threshold Lines
-            fig.add_hline(y=long_entry, line_dash="dash", line_color="green", annotation_text="Long Entry", annotation_position="top right", row=1, col=1)
-            fig.add_hline(y=long_exit, line_dash="dot", line_color="darkgreen", annotation_text="Long Exit", annotation_position="bottom right", row=1, col=1)
-            
+            fig.add_hline(y=long_entry, line_dash="dash", line_color="green", row=1, col=1)
+            fig.add_hline(y=long_exit, line_dash="dot", line_color="darkgreen", row=1, col=1)
             if enable_short:
-                fig.add_hline(y=short_entry, line_dash="dash", line_color="red", annotation_text="Short Entry", annotation_position="bottom right", row=1, col=1)
-                fig.add_hline(y=short_exit, line_dash="dot", line_color="darkred", annotation_text="Short Exit", annotation_position="top right", row=1, col=1)
+                fig.add_hline(y=short_entry, line_dash="dash", line_color="red", row=1, col=1)
+                fig.add_hline(y=short_exit, line_dash="dot", line_color="darkred", row=1, col=1)
 
-            # 3. Trade Markers
             if not event_log.empty:
-                entries_long = event_log[event_log['Type'] == 'Entry Long']
-                if not entries_long.empty:
-                    fig.add_trace(go.Scatter(x=entries_long['Date'], y=entries_long['Price'], mode='markers', name='Buy Signal', marker=dict(symbol='triangle-up', size=12, color='green')), row=1, col=1)
-                
-                entries_short = event_log[event_log['Type'] == 'Entry Short']
-                if not entries_short.empty:
-                    fig.add_trace(go.Scatter(x=entries_short['Date'], y=entries_short['Price'], mode='markers', name='Sell Signal', marker=dict(symbol='triangle-down', size=12, color='red')), row=1, col=1)
-                
-                exits = event_log[event_log['Type'].str.contains('Exit')]
-                if not exits.empty:
-                    fig.add_trace(go.Scatter(x=exits['Date'], y=exits['Price'], mode='markers', name='Exit', marker=dict(symbol='x', size=10, color='black')), row=1, col=1)
+                entries = event_log[event_log['Type'].str.contains('Entry')]
+                if not entries.empty:
+                    fig.add_trace(go.Scatter(x=entries['Date'], y=entries['Price'], mode='markers', name='Entry', marker=dict(size=10, color='orange')), row=1, col=1)
 
-            # 4. PnL Line
-            fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Net_PnL'], name='PnL ($)', fill='tozeroy', line=dict(color='#6495ed')), row=2, col=1)
-            
+            # Using Ruri Blue for PnL
+            fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Net_PnL'], name='PnL ($)', fill='tozeroy', line=dict(color='#2A5CAA')), row=2, col=1)
             fig.update_layout(height=600, template="seaborn", margin=dict(l=40, r=40, t=20, b=40))
             st.plotly_chart(fig, use_container_width=True)
             
             st.divider()
-            
-            # --- Trade List ---
-            col_t1, col_t2 = st.columns(2)
-            with col_t1:
-                st.subheader("Recent Closed Trades")
+            c_t1, c_t2 = st.columns(2)
+            with c_t1:
+                st.subheader("Recent Trades")
                 if not closed_trades.empty:
                     st.dataframe(closed_trades.sort_values(by='Exit Date', ascending=False).style.format({"PnL": "${:,.0f}"}), use_container_width=True, hide_index=True)
-                else:
-                    st.info("No closed trades.")
-            
-            with col_t2:
+            with c_t2:
                 st.subheader("Event Log")
                 if not event_log.empty:
                     st.dataframe(event_log.sort_values(by='Date', ascending=False).style.format({"Price": "{:.2f}%"}), use_container_width=True, hide_index=True)
-
-
-# ==========================================
-# TAB 2: Batch Summary
-# ==========================================
-with tab2:
-    st.subheader("🔎 Batch Strategy Summary")
-    st.markdown("Run the current strategy settings against **all** AH pairs.")
-    
-    if st.button("Run Batch Backtest"):
-        summary_data = []
-        progress_bar = st.progress(0)
-        pairs_items = list(AH_PAIRS.items())
-        
-        for idx, (name, tickers) in enumerate(pairs_items):
-            df_curr = fetch_pair_data(tickers['A'], tickers['H'], start_date_input, date.today())
-            
-            if not df_curr.empty:
-                res, _, trades = run_backtest(
-                    df_curr, long_entry, long_exit, short_entry, short_exit, trade_size, enable_short
-                )
-                
-                total_trades = len(trades)
-                total_pnl = res['Net_PnL'].iloc[-1]
-                
-                roll_max = res['Net_PnL'].cummax()
-                max_dd_dollar = (res['Net_PnL'] - roll_max).min()
-                
-                longest_horizon = trades['Duration'].max() if not trades.empty else 0
-                hit_rate = (len(trades[trades['PnL'] > 0]) / total_trades) if total_trades > 0 else 0
-                
-                summary_data.append({
-                    "Pair": name,
-                    "Total Trades": total_trades,
-                    "Longest Horizon (Days)": longest_horizon,
-                    "Total PnL ($)": total_pnl,
-                    "Max DD ($)": max_dd_dollar,
-                    "Hit Rate": hit_rate
-                })
-            
-            progress_bar.progress((idx + 1) / len(pairs_items))
-        
-        if summary_data:
-            df_summary = pd.DataFrame(summary_data)
-            
-            st.dataframe(
-                df_summary.style
-                .format({
-                    "Total PnL ($)": "${:,.0f}",
-                    "Max DD ($)": "${:,.0f}",
-                    "Hit Rate": "{:.1%}",
-                    "Longest Horizon (Days)": "{:.0f}"
-                }, na_rep="")
-                .background_gradient(subset=["Total PnL ($)", "Hit Rate"], cmap="RdYlGn")
-                .background_gradient(subset=["Max DD ($)"], cmap="Reds_r")
-                .highlight_null(props="background-color: white; color: black;"), 
-                use_container_width=True,
-                height=800
-            )
-
-# ==========================================
-# TAB 3: Annual Stats Analysis (Updated)
-# ==========================================
-with tab3:
-    st.subheader("📊 Annual Spread Statistics & Comparison")
-    
-    # --- 1. Multi-Pair Chart Section ---
-    st.write("#### 1. Spread History Comparison")
-    
-    selected_chart_pairs = st.multiselect(
-        "Select Pairs to Compare (Max 10 recommended)", 
-        options=list(AH_PAIRS.keys()),
-        default=[list(AH_PAIRS.keys())[0], list(AH_PAIRS.keys())[1]]
-    )
-    
-    if selected_chart_pairs:
-        fig_comp = go.Figure()
-        
-        for p in selected_chart_pairs:
-            p_tickers = AH_PAIRS[p]
-            df_p = fetch_pair_data(p_tickers['A'], p_tickers['H'], start_date_input, date.today())
-            if not df_p.empty:
-                 # Calculate Spread
-                df_p['A_USD'] = df_p['A_Local'] / df_p['USDCNH']
-                df_p['H_USD'] = df_p['H_Local'] / df_p['USDHKD']
-                spread_series = ( (df_p['A_USD'] / df_p['H_USD']) - 1 ) * 100
-                fig_comp.add_trace(go.Scatter(x=df_p.index, y=spread_series, name=p))
-        
-        fig_comp.update_layout(title="Historical Spread (%) Comparison", template="seaborn", hovermode="x unified", height=500)
-        st.plotly_chart(fig_comp, use_container_width=True)
-    
-    st.divider()
-
-    # --- 2. Heatmap Section ---
-    st.write("#### 2. Annual Heatmap Generator")
-    if st.button("Generate Annual Stats Matrix"):
-        all_stats = []
-        progress_bar = st.progress(0)
-        pairs_items = list(AH_PAIRS.items())
-        
-        for idx, (name, tickers) in enumerate(pairs_items):
-            df_curr = fetch_pair_data(tickers['A'], tickers['H'], start_date_input, date.today())
-            
-            if not df_curr.empty:
-                df_curr['A_USD'] = df_curr['A_Local'] / df_curr['USDCNH']
-                df_curr['H_USD'] = df_curr['H_Local'] / df_curr['USDHKD']
-                df_curr['Spread_Pct'] = ( (df_curr['A_USD'] / df_curr['H_USD']) - 1 ) * 100
-                df_curr['Year'] = df_curr.index.year
-                
-                grouped = df_curr.groupby('Year')['Spread_Pct']
-                
-                annual_means = grouped.mean()
-                annual_stds = grouped.std()
-                annual_mins = grouped.min()
-                annual_maxs = grouped.max()
-                
-                # New: Calculate Difference
-                annual_diffs = annual_maxs - annual_mins
-                
-                unique_years = df_curr['Year'].unique()
-                for y in unique_years:
-                    all_stats.append({
-                        "Pair": name,
-                        "Year": y,
-                        "Average Spread": annual_means.get(y, np.nan),
-                        "Spread Volatility": annual_stds.get(y, np.nan),
-                        "Min Spread": annual_mins.get(y, np.nan),
-                        "Max Spread": annual_maxs.get(y, np.nan),
-                        "Spread Range": annual_diffs.get(y, np.nan) # Added Metric
-                    })
-            
-            progress_bar.progress((idx + 1) / len(pairs_items))
-        
-        st.session_state['annual_stats'] = pd.DataFrame(all_stats)
-
-    if 'annual_stats' in st.session_state and not st.session_state['annual_stats'].empty:
-        df_stats = st.session_state['annual_stats']
-        
-        metric_map = {
-            "Average Spread": "Average Spread",
-            "Spread Volatility (Std Dev)": "Spread Volatility",
-            "Maximum Spread": "Max Spread",
-            "Minimum Spread": "Min Spread",
-            "Spread Range (Max - Min)": "Spread Range" # New Choice
-        }
-        
-        col_ctrl, _ = st.columns([1, 2])
-        with col_ctrl:
-            selected_metric_label = st.radio("Select Metric to Visualize", list(metric_map.keys()), horizontal=True)
-            selected_metric_col = metric_map[selected_metric_label]
-
-        pivot_df = df_stats.pivot(index='Pair', columns='Year', values=selected_metric_col)
-        
-        if not pivot_df.empty:
-            last_year = pivot_df.columns.max()
-            pivot_df = pivot_df.sort_values(by=last_year, ascending=False)
-        
-        st.write(f"### Heatmap: {selected_metric_label}")
-        
-        # Color Map Logic
-        if "Volatility" in selected_metric_label or "Range" in selected_metric_label:
-            fmt = "{:.2f}"
-            cmap = "Reds"
-        else:
-            fmt = "{:.1f}%"
-            cmap = "RdYlGn" if "Min" not in selected_metric_label else "RdYlGn_r"
-            
-        st.dataframe(
-            pivot_df.style
-            .format(fmt, na_rep="")
-            .background_gradient(cmap=cmap, axis=None)
-            .highlight_null(props="background-color: white; color: black;"), 
-            use_container_width=True,
-            height=800
-        )
