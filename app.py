@@ -113,7 +113,7 @@ def fetch_pair_data(a_ticker, h_ticker, start_date, end_date):
 
 @st.cache_data(ttl=600)
 def get_latest_spreads():
-    """Sequential fetch of just the latest data to determine current spreads (Stable)."""
+    """Sequential fetch of just the latest data (Stable)."""
     results = []
     start_date = date.today() - timedelta(days=10)
     end_date = date.today() + timedelta(days=1)
@@ -224,7 +224,7 @@ start_date_input = st.sidebar.date_input("Start Date", date(2021, 1, 1))
 # --- Main App ---
 st.title(f"📉 AH Premium: Fixed Threshold Backtest")
 
-tab1, tab2 = st.tabs(["Annual Stats Analysis", "Single Pair Analysis"])
+tab1, tab2, tab3 = st.tabs(["Annual Stats Analysis", "Single Pair Analysis", "Rolling Correlations"])
 
 # ==========================================
 # TAB 1: Annual Stats Analysis
@@ -232,8 +232,7 @@ tab1, tab2 = st.tabs(["Annual Stats Analysis", "Single Pair Analysis"])
 with tab1:
     st.subheader("📊 Annual Spread Statistics & Comparison")
     
-    # 1. Loading Latest Spreads (Sequential - Stable)
-    with st.spinner("Scanning current spreads (Sequential Fetch)..."):
+    with st.spinner("Scanning current spreads..."):
         latest_spread_df = get_latest_spreads()
     
     # Filter Logic: Auto-select pairs with spread < 10%
@@ -241,7 +240,6 @@ with tab1:
     if not latest_spread_df.empty:
         low_spread_pairs = latest_spread_df[latest_spread_df['Current Spread (%)'] < 10.0]
         default_selection = low_spread_pairs['Pair'].tolist()
-        
         if not default_selection:
             default_selection = [list(AH_PAIRS.keys())[0]]
             
@@ -257,7 +255,6 @@ with tab1:
     
     if selected_chart_pairs:
         fig_comp = go.Figure()
-        
         for i, p in enumerate(selected_chart_pairs):
             p_tickers = AH_PAIRS[p]
             df_p = fetch_pair_data(p_tickers['A'], p_tickers['H'], start_date_input, date.today())
@@ -265,8 +262,6 @@ with tab1:
                 df_p['A_USD'] = df_p['A_Local'] / df_p['USDCNH']
                 df_p['H_USD'] = df_p['H_Local'] / df_p['USDHKD']
                 spread_series = ( (df_p['A_USD'] / df_p['H_USD']) - 1 ) * 100
-                
-                # Assign Nippon Color cyclically
                 color_hex = NIPPON_COLORS[i % len(NIPPON_COLORS)]
                 fig_comp.add_trace(go.Scatter(x=df_p.index, y=spread_series, name=p, line=dict(color=color_hex, width=1.5)))
         
@@ -277,15 +272,12 @@ with tab1:
 
     # --- CURRENT SPREAD TABLE ---
     c_tbl, c_heat = st.columns([1, 2])
-    
     with c_tbl:
         st.write("#### 2. Current Spread Snapshot")
         if not latest_spread_df.empty:
             st.dataframe(
                 latest_spread_df.sort_values(by="Current Spread (%)").style.format({"Current Spread (%)": "{:.2f}%"}).background_gradient(cmap="RdYlGn_r"),
-                use_container_width=True,
-                height=600,
-                hide_index=True
+                use_container_width=True, height=600, hide_index=True
             )
         else:
             st.warning("Could not fetch latest spreads.")
@@ -300,7 +292,6 @@ with tab1:
             progress_bar = st.progress(0)
             pairs_items = list(AH_PAIRS.items())
             
-            # Sequential Loop for Stability
             for idx, (name, tickers) in enumerate(pairs_items):
                 df_curr = fetch_pair_data(tickers['A'], tickers['H'], start_date_input, date.today())
                 if not df_curr.empty:
@@ -346,7 +337,6 @@ with tab1:
                 last_year = pivot_df.columns.max()
                 pivot_df = pivot_df.sort_values(by=last_year, ascending=False)
             
-            # Formatting
             if "Volatility" in selected_metric_label or "Range" in selected_metric_label:
                 fmt = "{:.2f}"; cmap = "Reds"
             else:
@@ -363,7 +353,7 @@ with tab1:
 with tab2:
     col_sel, _ = st.columns([1, 2])
     with col_sel:
-        selected_pair = st.selectbox("Select AH Pair", list(AH_PAIRS.keys()))
+        selected_pair = st.selectbox("Select AH Pair", list(AH_PAIRS.keys()), key="single_pair_sel")
     pair_tickers = AH_PAIRS[selected_pair]
 
     with st.spinner(f"Analyzing {selected_pair}..."):
@@ -393,9 +383,7 @@ with tab2:
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.6, 0.4],
                                 subplot_titles=("AH Spread & Thresholds", "Cumulative PnL ($)"))
             
-            # Using Suoh Red for Spread line
             fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Spread_Pct'], name='Spread %', line=dict(color='#9E3D3F')), row=1, col=1)
-            
             fig.add_hline(y=long_entry, line_dash="dash", line_color="green", row=1, col=1)
             fig.add_hline(y=long_exit, line_dash="dot", line_color="darkgreen", row=1, col=1)
             if enable_short:
@@ -407,7 +395,6 @@ with tab2:
                 if not entries.empty:
                     fig.add_trace(go.Scatter(x=entries['Date'], y=entries['Price'], mode='markers', name='Entry', marker=dict(size=10, color='orange')), row=1, col=1)
 
-            # Using Ruri Blue for PnL
             fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Net_PnL'], name='PnL ($)', fill='tozeroy', line=dict(color='#2A5CAA')), row=2, col=1)
             fig.update_layout(height=600, template="seaborn", margin=dict(l=40, r=40, t=20, b=40))
             st.plotly_chart(fig, use_container_width=True)
@@ -422,3 +409,75 @@ with tab2:
                 st.subheader("Event Log")
                 if not event_log.empty:
                     st.dataframe(event_log.sort_values(by='Date', ascending=False).style.format({"Price": "{:.2f}%"}), use_container_width=True, hide_index=True)
+
+# ==========================================
+# TAB 3: Rolling Correlations (NEW)
+# ==========================================
+with tab3:
+    st.subheader("🔄 Rolling Correlation Analysis")
+    st.caption("Analyze how A-Shares, H-Shares, and the Premium (Spread) move relative to each other over time.")
+    
+    col_corr_sel, _ = st.columns([1, 2])
+    with col_corr_sel:
+        # Unique key to avoid conflict with Tab 2
+        selected_pair_corr = st.selectbox("Select AH Pair", list(AH_PAIRS.keys()), key="corr_pair_sel")
+    
+    tickers_corr = AH_PAIRS[selected_pair_corr]
+    
+    with st.spinner(f"Calculating correlations for {selected_pair_corr}..."):
+        df_corr = fetch_pair_data(tickers_corr['A'], tickers_corr['H'], start_date_input, date.today())
+        
+        if not df_corr.empty:
+            # 1. Data Prep: Calculate USD Returns and Spread Changes
+            df_corr['A_USD'] = df_corr['A_Local'] / df_corr['USDCNH']
+            df_corr['H_USD'] = df_corr['H_Local'] / df_corr['USDHKD']
+            df_corr['Spread_Pct'] = ( (df_corr['A_USD'] / df_corr['H_USD']) - 1 ) * 100
+            
+            # Returns (1-day pct change)
+            df_corr['Ret_A'] = df_corr['A_USD'].pct_change()
+            df_corr['Ret_H'] = df_corr['H_USD'].pct_change()
+            df_corr['Ret_Spread'] = df_corr['Spread_Pct'].diff() # Change in spread points
+            
+            # 2. Rolling Correlations
+            # 30-Day
+            df_corr['Corr30_AH'] = df_corr['Ret_A'].rolling(30).corr(df_corr['Ret_H'])
+            df_corr['Corr30_SprA'] = df_corr['Ret_Spread'].rolling(30).corr(df_corr['Ret_A'])
+            df_corr['Corr30_SprH'] = df_corr['Ret_Spread'].rolling(30).corr(df_corr['Ret_H'])
+            
+            # 60-Day
+            df_corr['Corr60_AH'] = df_corr['Ret_A'].rolling(60).corr(df_corr['Ret_H'])
+            df_corr['Corr60_SprA'] = df_corr['Ret_Spread'].rolling(60).corr(df_corr['Ret_A'])
+            df_corr['Corr60_SprH'] = df_corr['Ret_Spread'].rolling(60).corr(df_corr['Ret_H'])
+            
+            # 3. Plots
+            
+            # Chart 1: A vs H Returns Correlation
+            fig_ah = go.Figure()
+            fig_ah.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Corr30_AH'], name='30-Day Correlation', line=dict(color='#2A5CAA', width=1.5))) # Ruri
+            fig_ah.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Corr60_AH'], name='60-Day Correlation', line=dict(color='#9E3D3F', width=1.5))) # Suoh
+            fig_ah.update_layout(
+                title=f"Correlation: A-Share Returns vs H-Share Returns",
+                yaxis_title="Correlation",
+                template="seaborn", height=400, hovermode="x unified"
+            )
+            st.plotly_chart(fig_ah, use_container_width=True)
+            
+            c_c1, c_c2 = st.columns(2)
+            
+            # Chart 2: Spread vs A Returns
+            with c_c1:
+                fig_sa = go.Figure()
+                fig_sa.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Corr30_SprA'], name='30-Day', line=dict(color='#838B0D', width=1))) # Koke
+                fig_sa.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Corr60_SprA'], name='60-Day', line=dict(color='#FFB11B', width=1))) # Yamabuki
+                fig_sa.update_layout(title="Correlation: Spread Change vs A-Share Returns", template="seaborn", height=350)
+                st.plotly_chart(fig_sa, use_container_width=True)
+
+            # Chart 3: Spread vs H Returns
+            with c_c2:
+                fig_sh = go.Figure()
+                fig_sh.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Corr30_SprH'], name='30-Day', line=dict(color='#838B0D', width=1)))
+                fig_sh.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Corr60_SprH'], name='60-Day', line=dict(color='#FFB11B', width=1)))
+                fig_sh.update_layout(title="Correlation: Spread Change vs H-Share Returns", template="seaborn", height=350)
+                st.plotly_chart(fig_sh, use_container_width=True)
+        else:
+            st.error("No data available for correlation analysis.")
