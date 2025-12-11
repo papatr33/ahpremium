@@ -78,6 +78,8 @@ AH_PAIRS = {
     "Dongfang Electric": {"A": "600875.SS", "H": "1072.HK"},
     "CITIC Securities": {"A": "600030.SS", "H": "6030.HK"},
     "PICC Group": {"A": "601319.SS", "H": "1339.HK"},
+    "CATL": {"A": "300750.SZ", "H": "3750.HK"},
+    "Midea": {"A": "000333.SS", "H": "0300.HK"}
 }
 
 # --- Core Functions ---
@@ -481,3 +483,4 @@ with tab3:
                 st.plotly_chart(fig_sh, use_container_width=True)
         else:
             st.error("No data available for correlation analysis.")
+
