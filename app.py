@@ -8,7 +8,7 @@ from datetime import date, timedelta
 
 # --- Page Config ---
 st.set_page_config(
-    page_title="AH Premium: Strategy Backtest",
+    page_title="AH Premium",
     page_icon="📉",
     layout="wide"
 )
@@ -79,7 +79,7 @@ AH_PAIRS = {
     "CITIC Securities": {"A": "600030.SS", "H": "6030.HK"},
     "PICC Group": {"A": "601319.SS", "H": "1339.HK"},
     "CATL": {"A": "300750.SZ", "H": "3750.HK"},
-    "Midea": {"A": "000333.SS", "H": "0300.HK"}
+    "Midea": {"A": "000333.SZ", "H": "0300.HK"}
 }
 
 # --- Core Functions ---
@@ -87,7 +87,7 @@ AH_PAIRS = {
 def fetch_pair_data(a_ticker, h_ticker, start_date, end_date):
     tickers = [a_ticker, h_ticker, "CNY=X", "HKD=X"]
     try:
-        raw = yf.download(tickers, start=start_date, end=end_date, progress=False, group_by='column')
+        raw = yf.download(tickers, start=start_date, end=end_date, progress=False, group_by='column', auto_adjust=False)
     except Exception:
         return pd.DataFrame()
     
@@ -115,18 +115,32 @@ def fetch_pair_data(a_ticker, h_ticker, start_date, end_date):
 
 @st.cache_data(ttl=600)
 def get_latest_spreads():
-    """Sequential fetch of just the latest data (Stable)."""
+    """Sequential fetch of latest data with 1-day, 5-day, and 30-day spread changes."""
     results = []
-    start_date = date.today() - timedelta(days=10)
+    start_date = date.today() - timedelta(days=60)  # Extended to ensure 30-day data
     end_date = date.today() + timedelta(days=1)
     
     for name, tickers in AH_PAIRS.items():
         df = fetch_pair_data(tickers['A'], tickers['H'], start_date, end_date)
-        if not df.empty:
+        if not df.empty and len(df) >= 2:
             df['A_USD'] = df['A_Local'] / df['USDCNH']
             df['H_USD'] = df['H_Local'] / df['USDHKD']
-            current_spread = ( (df['A_USD'].iloc[-1] / df['H_USD'].iloc[-1]) - 1 ) * 100
-            results.append({"Pair": name, "Current Spread (%)": current_spread})
+            df['Spread_Pct'] = ( (df['A_USD'] / df['H_USD']) - 1 ) * 100
+            
+            current_spread = df['Spread_Pct'].iloc[-1]
+            
+            # Calculate changes
+            change_1d = current_spread - df['Spread_Pct'].iloc[-2] if len(df) >= 2 else np.nan
+            change_5d = current_spread - df['Spread_Pct'].iloc[-6] if len(df) >= 6 else np.nan
+            change_30d = current_spread - df['Spread_Pct'].iloc[-31] if len(df) >= 31 else np.nan
+            
+            results.append({
+                "Pair": name, 
+                "Current Spread (%)": current_spread,
+                "1D Change (%)": change_1d,
+                "5D Change (%)": change_5d,
+                "30D Change (%)": change_30d
+            })
     
     return pd.DataFrame(results)
 
@@ -224,7 +238,7 @@ trade_size = 1_000_000
 start_date_input = st.sidebar.date_input("Start Date", date(2021, 1, 1))
 
 # --- Main App ---
-st.title(f"📉 AH Premium: Fixed Threshold Backtest")
+st.title(f"📉 AH Premium")
 
 tab1, tab2, tab3 = st.tabs(["Annual Stats Analysis", "Single Pair Analysis", "Rolling Correlations"])
 
@@ -237,17 +251,24 @@ with tab1:
     with st.spinner("Scanning current spreads..."):
         latest_spread_df = get_latest_spreads()
     
-    # Filter Logic: Auto-select pairs with spread < 10%
+    # --- CHART SECTION ---
+    st.write("#### 1. Spread History Comparison")
+    
+    # User input for threshold
+    spread_threshold = st.number_input(
+        "Default selection threshold: Pairs with Current Spread < (%)", 
+        value=10.0, 
+        step=1.0,
+        help="Pairs with current spread below this threshold will be auto-selected"
+    )
+    
+    # Filter Logic: Auto-select pairs with spread < user-defined threshold
     default_selection = []
     if not latest_spread_df.empty:
-        low_spread_pairs = latest_spread_df[latest_spread_df['Current Spread (%)'] < 10.0]
+        low_spread_pairs = latest_spread_df[latest_spread_df['Current Spread (%)'] < spread_threshold]
         default_selection = low_spread_pairs['Pair'].tolist()
         if not default_selection:
             default_selection = [list(AH_PAIRS.keys())[0]]
-            
-    # --- CHART SECTION ---
-    st.write("#### 1. Spread History Comparison")
-    st.caption("Default selection: Pairs with Current Spread < 10%")
     
     selected_chart_pairs = st.multiselect(
         "Select Pairs to Compare", 
@@ -273,81 +294,19 @@ with tab1:
     st.divider()
 
     # --- CURRENT SPREAD TABLE ---
-    c_tbl, c_heat = st.columns([1, 2])
-    with c_tbl:
-        st.write("#### 2. Current Spread Snapshot")
-        if not latest_spread_df.empty:
-            st.dataframe(
-                latest_spread_df.sort_values(by="Current Spread (%)").style.format({"Current Spread (%)": "{:.2f}%"}).background_gradient(cmap="RdYlGn_r"),
-                use_container_width=True, height=600, hide_index=True
-            )
-        else:
-            st.warning("Could not fetch latest spreads.")
-
-    # --- HEATMAP SECTION ---
-    with c_heat:
-        st.write("#### 3. Annual Heatmap Generator")
-        st.info("Click below to calculate historical stats.")
-        
-        if st.button("Generate Annual Stats Matrix"):
-            all_stats = []
-            progress_bar = st.progress(0)
-            pairs_items = list(AH_PAIRS.items())
-            
-            for idx, (name, tickers) in enumerate(pairs_items):
-                df_curr = fetch_pair_data(tickers['A'], tickers['H'], start_date_input, date.today())
-                if not df_curr.empty:
-                    df_curr['A_USD'] = df_curr['A_Local'] / df_curr['USDCNH']
-                    df_curr['H_USD'] = df_curr['H_Local'] / df_curr['USDHKD']
-                    df_curr['Spread_Pct'] = ( (df_curr['A_USD'] / df_curr['H_USD']) - 1 ) * 100
-                    df_curr['Year'] = df_curr.index.year
-                    
-                    grouped = df_curr.groupby('Year')['Spread_Pct']
-                    annual_means = grouped.mean()
-                    annual_stds = grouped.std()
-                    annual_mins = grouped.min()
-                    annual_maxs = grouped.max()
-                    annual_diffs = annual_maxs - annual_mins
-                    
-                    unique_years = df_curr['Year'].unique()
-                    for y in unique_years:
-                        all_stats.append({
-                            "Pair": name, "Year": y,
-                            "Average Spread": annual_means.get(y, np.nan),
-                            "Spread Volatility": annual_stds.get(y, np.nan),
-                            "Min Spread": annual_mins.get(y, np.nan),
-                            "Max Spread": annual_maxs.get(y, np.nan),
-                            "Spread Range": annual_diffs.get(y, np.nan)
-                        })
-                progress_bar.progress((idx + 1) / len(pairs_items))
-            st.session_state['annual_stats'] = pd.DataFrame(all_stats)
-
-        if 'annual_stats' in st.session_state and not st.session_state['annual_stats'].empty:
-            df_stats = st.session_state['annual_stats']
-            metric_map = {
-                "Average Spread": "Average Spread",
-                "Spread Volatility": "Spread Volatility",
-                "Maximum Spread": "Max Spread",
-                "Minimum Spread": "Min Spread",
-                "Spread Range (Max - Min)": "Spread Range"
-            }
-            selected_metric_label = st.radio("Select Metric", list(metric_map.keys()), horizontal=True)
-            selected_metric_col = metric_map[selected_metric_label]
-
-            pivot_df = df_stats.pivot(index='Pair', columns='Year', values=selected_metric_col)
-            if not pivot_df.empty:
-                last_year = pivot_df.columns.max()
-                pivot_df = pivot_df.sort_values(by=last_year, ascending=False)
-            
-            if "Volatility" in selected_metric_label or "Range" in selected_metric_label:
-                fmt = "{:.2f}"; cmap = "Reds"
-            else:
-                fmt = "{:.1f}%"; cmap = "RdYlGn" if "Min" not in selected_metric_label else "RdYlGn_r"
-                
-            st.dataframe(
-                pivot_df.style.format(fmt, na_rep="").background_gradient(cmap=cmap, axis=None).highlight_null(props="background-color: white; color: black;"), 
-                use_container_width=True, height=600
-            )
+    st.write("#### 2. Current Spread Snapshot")
+    if not latest_spread_df.empty:
+        st.dataframe(
+            latest_spread_df.sort_values(by="Current Spread (%)").style.format({
+                "Current Spread (%)": "{:.2f}%",
+                "1D Change (%)": "{:.2f}%",
+                "5D Change (%)": "{:.2f}%",
+                "30D Change (%)": "{:.2f}%"
+            }).background_gradient(cmap="RdYlGn_r", subset=["Current Spread (%)"]),
+            use_container_width=True, height=600, hide_index=True
+        )
+    else:
+        st.warning("Could not fetch latest spreads.")
 
 # ==========================================
 # TAB 2: Single Pair (Visual Dashboard)
