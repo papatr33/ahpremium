@@ -235,7 +235,7 @@ short_exit = st.sidebar.number_input("Exit Short if Spread < (%)", value=120.0, 
 st.sidebar.divider()
 st.sidebar.subheader("General Settings")
 trade_size = 1_000_000
-start_date_input = st.sidebar.date_input("Start Date", date(2021, 1, 1))
+start_date_input = st.sidebar.date_input("Start Date", date(2024, 1, 1))
 
 # --- Main App ---
 st.title(f"📉 AH Premium")
@@ -442,4 +442,5 @@ with tab3:
                 st.plotly_chart(fig_sh, use_container_width=True)
         else:
             st.error("No data available for correlation analysis.")
+
 
