@@ -23,20 +23,28 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Nippon Colors Palette ---
+# --- Nippon Colors Palette (https://nipponcolors.com/) ---
+# Traditional Japanese colors for data visualization
 NIPPON_COLORS = [
-    '#9E3D3F', # Suoh
-    '#2A5CAA', # Ruri
-    '#838B0D', # Koke
-    '#FFB11B', # Yamabuki
-    '#5B3131', # Ebi-cha
-    '#005CAF', # Rurikon
-    '#C1328E', # Tsutsuji
-    '#6A8372', # Byakuroku
-    '#E49E61', # Araigaki
-    '#4D4398', # Kon-kikyo
-    '#7DB9DE', # Wasurenagusa
+    '#9E3D3F',  # Suoh (蘇芳) - Deep burgundy red
+    '#005CAF',  # Ruri (瑠璃) - Lapis lazuli blue
+    '#838B0D',  # Koke (苔) - Moss green
+    '#FFB11B',  # Yamabuki (山吹) - Golden yellow
+    '#6A4C9C',  # Sumire (菫) - Violet
+    '#F17C67',  # Sangosyu (珊瑚朱) - Coral red
+    '#3A8FB7',  # Hanada (縹) - Light blue
+    '#6A8372',  # Byakuroku (白緑) - Pale green
+    '#824880',  # Ayame (菖蒲) - Iris purple
+    '#E16B8C',  # Kohbai (紅梅) - Pink plum
+    '#1B813E',  # Wakatake (若竹) - Young bamboo green
 ]
+
+# Named colors for specific UI elements
+NIPPON_SUOH = '#9E3D3F'       # Deep red - for A-share
+NIPPON_RURI = '#005CAF'       # Deep blue - for H-share  
+NIPPON_KOKE = '#838B0D'       # Moss green - for Spread
+NIPPON_KOHBAI = '#E16B8C'     # Pink plum - accent
+NIPPON_WASURENAGUSA = '#7DB9DE'  # Forget-me-not blue - light accent
 
 # --- Data Config ---
 AH_PAIRS = {
@@ -146,128 +154,258 @@ def get_latest_spreads():
     
     return pd.DataFrame(results)
 
-def run_backtest(df, long_entry, long_exit, short_entry, short_exit, trade_size=1_000_000, enable_short=False):
-    df = df.copy()
-    df['A_USD'] = df['A_Local'] / df['USDCNH']
-    df['H_USD'] = df['H_Local'] / df['USDHKD']
-    df['Spread_Pct'] = ( (df['A_USD'] / df['H_USD']) - 1 ) * 100
-    df = df.dropna()
-    
-    position = 0 
-    cumulative_pnl = [0.0] 
-    events = []
-    closed_trades = []
-    
-    shares_a = 0.0
-    shares_h = 0.0
-    entry_date = None
-    current_trade_pnl = 0.0
-    
-    for i in range(len(df)):
-        row = df.iloc[i]
-        today_date = df.index[i]
-        spread_val = row['Spread_Pct']
-        daily_pnl = 0.0
-        
-        if i > 0 and position != 0:
-            prev_row = df.iloc[i-1]
-            delta_a = row['A_USD'] - prev_row['A_USD']
-            delta_h = row['H_USD'] - prev_row['H_USD']
-            
-            if position == 1: 
-                pnl_long = delta_a * shares_a
-                pnl_short = delta_h * shares_h 
-                daily_pnl = pnl_long - pnl_short
-            elif position == -1: 
-                pnl_short = delta_a * shares_a
-                pnl_long = delta_h * shares_h
-                daily_pnl = pnl_long - pnl_short
-            
-            current_trade_pnl += daily_pnl
-
-        cumulative_pnl.append(cumulative_pnl[-1] + daily_pnl)
-            
-        if position == 0:
-            if spread_val < long_entry:
-                position = 1
-                shares_a = trade_size / row['A_USD']
-                shares_h = trade_size / row['H_USD']
-                entry_date = today_date
-                current_trade_pnl = 0.0
-                events.append({"Date": today_date, "Type": "Entry Long", "Price": spread_val, "Shares_A": shares_a, "Shares_H": shares_h})
-            elif enable_short and (spread_val > short_entry):
-                position = -1
-                shares_a = trade_size / row['A_USD']
-                shares_h = trade_size / row['H_USD']
-                entry_date = today_date
-                current_trade_pnl = 0.0
-                events.append({"Date": today_date, "Type": "Entry Short", "Price": spread_val, "Shares_A": shares_a, "Shares_H": shares_h})
-        
-        elif position == 1:
-            if spread_val > long_exit:
-                events.append({"Date": today_date, "Type": "Exit Long", "Price": spread_val, "Shares_A": 0, "Shares_H": 0})
-                closed_trades.append({"Entry Date": entry_date, "Exit Date": today_date, "Duration": (today_date - entry_date).days, "PnL": current_trade_pnl, "Type": "Long"})
-                position = 0; shares_a = 0; shares_h = 0; entry_date = None
-                
-        elif position == -1:
-            if spread_val < short_exit:
-                events.append({"Date": today_date, "Type": "Exit Short", "Price": spread_val, "Shares_A": 0, "Shares_H": 0})
-                closed_trades.append({"Entry Date": entry_date, "Exit Date": today_date, "Duration": (today_date - entry_date).days, "PnL": current_trade_pnl, "Type": "Short"})
-                position = 0; shares_a = 0; shares_h = 0; entry_date = None
-    
-    df['Net_PnL'] = cumulative_pnl[1:]
-    return df, pd.DataFrame(events), pd.DataFrame(closed_trades)
-
 # --- Sidebar ---
-st.sidebar.header("Strategy Config")
-st.sidebar.write("Logic: Manual Thresholds")
-
-# LONG PARAMS
-st.sidebar.subheader("Long (Buy A / Sell H)")
-long_entry = st.sidebar.number_input("Enter Long if Spread < (%)", value=30.0, step=1.0)
-long_exit = st.sidebar.number_input("Exit Long if Spread > (%)", value=50.0, step=1.0)
-
-st.sidebar.divider()
-
-# SHORT PARAMS
-enable_short = st.sidebar.checkbox("Enable Short Strategy?", value=False)
-short_entry = st.sidebar.number_input("Enter Short if Spread > (%)", value=140.0, step=5.0, disabled=not enable_short)
-short_exit = st.sidebar.number_input("Exit Short if Spread < (%)", value=120.0, step=5.0, disabled=not enable_short)
-
-st.sidebar.divider()
-st.sidebar.subheader("General Settings")
-trade_size = 1_000_000
+st.sidebar.header("Settings")
 start_date_input = st.sidebar.date_input("Start Date", date(2024, 1, 1))
 
 # --- Main App ---
-st.title(f"📉 AH Premium")
+st.title(f"📉 AH Premium Viewer")
 
-tab1, tab2, tab3 = st.tabs(["Annual Stats Analysis", "Single Pair Analysis", "Rolling Correlations"])
+tab1, tab2, tab3, tab4 = st.tabs(["Spread Overview", "Pair Detail Chart", "Spread Comparison", "Correlation Analysis"])
 
 # ==========================================
-# TAB 1: Annual Stats Analysis
+# TAB 1: Spread Overview
 # ==========================================
 with tab1:
-    st.subheader("📊 Annual Spread Statistics & Comparison")
+    st.subheader("📊 Current Spread Snapshot")
     
     with st.spinner("Scanning current spreads..."):
         latest_spread_df = get_latest_spreads()
     
-    # --- CHART SECTION ---
-    st.write("#### 1. Spread History Comparison")
+    # --- CURRENT SPREAD TABLE ---
+    if not latest_spread_df.empty:
+        st.dataframe(
+            latest_spread_df.sort_values(by="Current Spread (%)").style.format({
+                "Current Spread (%)": "{:.2f}%",
+                "1D Change (%)": "{:.2f}%",
+                "5D Change (%)": "{:.2f}%",
+                "30D Change (%)": "{:.2f}%"
+            }).background_gradient(cmap="RdYlGn_r", subset=["Current Spread (%)"]),
+            use_container_width=True, height=700, hide_index=True
+        )
+    else:
+        st.warning("Could not fetch latest spreads.")
+
+# ==========================================
+# TAB 2: Pair Detail Chart (A, H prices + Spread)
+# ==========================================
+with tab2:
+    st.subheader("📈 Individual Pair Analysis")
+    
+    col_sel, col_info = st.columns([1, 2])
+    with col_sel:
+        selected_pair = st.selectbox("Select AH Pair", list(AH_PAIRS.keys()), key="detail_pair_sel")
+    
+    pair_tickers = AH_PAIRS[selected_pair]
+    
+    with col_info:
+        st.caption(f"A-Share: `{pair_tickers['A']}` | H-Share: `{pair_tickers['H']}`")
+
+    with st.spinner(f"Loading data for {selected_pair}..."):
+        raw_data = fetch_pair_data(pair_tickers['A'], pair_tickers['H'], start_date_input, date.today())
+        
+        if raw_data.empty:
+            st.error("No data found for this pair.")
+        else:
+            # Calculate USD prices and spread
+            df_view = raw_data.copy()
+            df_view['A_USD'] = df_view['A_Local'] / df_view['USDCNH']
+            df_view['H_USD'] = df_view['H_Local'] / df_view['USDHKD']
+            df_view['Spread_Pct'] = ((df_view['A_USD'] / df_view['H_USD']) - 1) * 100
+            
+            # Current metrics
+            current_spread = df_view['Spread_Pct'].iloc[-1]
+            current_a = df_view['A_Local'].iloc[-1]
+            current_h = df_view['H_Local'].iloc[-1]
+            spread_avg = df_view['Spread_Pct'].mean()
+            spread_std = df_view['Spread_Pct'].std()
+            spread_z = (current_spread - spread_avg) / spread_std if spread_std > 0 else 0
+            
+            # Metrics row
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Current Spread", f"{current_spread:.2f}%")
+            c2.metric("A-Share Price (CNY)", f"¥{current_a:.2f}")
+            c3.metric("H-Share Price (HKD)", f"HK${current_h:.2f}")
+            c4.metric("Spread Avg", f"{spread_avg:.2f}%")
+            c5.metric("Z-Score", f"{spread_z:.2f}")
+            
+            st.divider()
+            
+            # --- Main Chart: A & H Prices with Spread ---
+            # Using Nippon Colors: Suoh (red) for A, Ruri (blue) for H, Koke (green) for Spread
+            SUOH = NIPPON_SUOH
+            RURI = NIPPON_RURI
+            KOKE = NIPPON_KOKE
+            
+            fig_detail = make_subplots(
+                rows=2, cols=1, 
+                shared_xaxes=True, 
+                vertical_spacing=0.08, 
+                row_heights=[0.6, 0.4],
+                subplot_titles=("A-Share & H-Share Prices (USD)", "AH Spread (%)")
+            )
+            
+            # Row 1: A and H prices in USD
+            fig_detail.add_trace(
+                go.Scatter(
+                    x=df_view.index, 
+                    y=df_view['A_USD'], 
+                    name='A-Share (USD)', 
+                    line=dict(color=SUOH, width=2),
+                    hovertemplate='%{y:.2f}<extra>A-Share (USD)</extra>'
+                ), 
+                row=1, col=1
+            )
+            fig_detail.add_trace(
+                go.Scatter(
+                    x=df_view.index, 
+                    y=df_view['H_USD'], 
+                    name='H-Share (USD)', 
+                    line=dict(color=RURI, width=2),
+                    hovertemplate='%{y:.2f}<extra>H-Share (USD)</extra>'
+                ), 
+                row=1, col=1
+            )
+            
+            # Row 2: Spread
+            fig_detail.add_trace(
+                go.Scatter(
+                    x=df_view.index, 
+                    y=df_view['Spread_Pct'], 
+                    name='Spread (%)', 
+                    fill='tozeroy',
+                    line=dict(color=KOKE, width=1.5),
+                    fillcolor='rgba(131, 139, 13, 0.3)',
+                    hovertemplate='%{y:.2f}%<extra>Spread</extra>'
+                ), 
+                row=2, col=1
+            )
+            
+            # Add average spread line
+            fig_detail.add_hline(
+                y=spread_avg, 
+                line_dash="dash", 
+                line_color="gray", 
+                row=2, col=1
+            )
+            
+            # Add ±1 std bands
+            fig_detail.add_hline(y=spread_avg + spread_std, line_dash="dot", line_color="lightgray", row=2, col=1)
+            fig_detail.add_hline(y=spread_avg - spread_std, line_dash="dot", line_color="lightgray", row=2, col=1)
+            
+            fig_detail.update_layout(
+                height=650, 
+                template="seaborn", 
+                hovermode="x unified",
+                margin=dict(l=40, r=40, t=40, b=40),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            fig_detail.update_yaxes(title_text="Price (USD)", row=1, col=1)
+            fig_detail.update_yaxes(title_text="Spread (%)", row=2, col=1)
+            
+            st.plotly_chart(fig_detail, use_container_width=True)
+            
+            # --- Secondary Chart: Local Currency Prices ---
+            with st.expander("📊 View Local Currency Prices (CNY & HKD)"):
+                fig_local = make_subplots(
+                    rows=1, cols=2,
+                    subplot_titles=("A-Share Price (CNY)", "H-Share Price (HKD)")
+                )
+                
+                fig_local.add_trace(
+                    go.Scatter(
+                        x=df_view.index, 
+                        y=df_view['A_Local'], 
+                        name='A (CNY)',
+                        line=dict(color=SUOH, width=1.5),
+                        hovertemplate='%{y:.2f}<extra>A (CNY)</extra>'
+                    ),
+                    row=1, col=1
+                )
+                fig_local.add_trace(
+                    go.Scatter(
+                        x=df_view.index, 
+                        y=df_view['H_Local'], 
+                        name='H (HKD)',
+                        line=dict(color=RURI, width=1.5),
+                        hovertemplate='%{y:.2f}<extra>H (HKD)</extra>'
+                    ),
+                    row=1, col=2
+                )
+                
+                fig_local.update_layout(height=350, template="seaborn", showlegend=False, hovermode="x unified")
+                st.plotly_chart(fig_local, use_container_width=True)
+            
+            # --- Statistics Table ---
+            with st.expander("📈 Spread Statistics"):
+                col_stat1, col_stat2 = st.columns(2)
+                
+                with col_stat1:
+                    stats_df = pd.DataFrame({
+                        'Metric': ['Current', 'Mean', 'Median', 'Std Dev', 'Min', 'Max', '25th Pct', '75th Pct'],
+                        'Spread (%)': [
+                            current_spread,
+                            spread_avg,
+                            df_view['Spread_Pct'].median(),
+                            spread_std,
+                            df_view['Spread_Pct'].min(),
+                            df_view['Spread_Pct'].max(),
+                            df_view['Spread_Pct'].quantile(0.25),
+                            df_view['Spread_Pct'].quantile(0.75)
+                        ]
+                    })
+                    st.dataframe(
+                        stats_df.style.format({'Spread (%)': '{:.2f}'}),
+                        use_container_width=True, 
+                        hide_index=True
+                    )
+                
+                with col_stat2:
+                    # Spread distribution histogram
+                    fig_hist = go.Figure()
+                    fig_hist.add_trace(go.Histogram(
+                        x=df_view['Spread_Pct'],
+                        nbinsx=40,
+                        marker_color=KOKE,
+                        opacity=0.7,
+                        name='Spread Distribution',
+                        hovertemplate='Spread: %{x:.2f}%<br>Count: %{y}<extra></extra>'
+                    ))
+                    fig_hist.add_vline(x=current_spread, line_dash="solid", line_color=SUOH, 
+                                       annotation_text=f"Current: {current_spread:.2f}%")
+                    fig_hist.add_vline(x=spread_avg, line_dash="dash", line_color="gray")
+                    fig_hist.update_layout(
+                        height=280,
+                        template="seaborn",
+                        showlegend=False,
+                        xaxis_title="Spread (%)",
+                        yaxis_title="Frequency"
+                    )
+                    st.plotly_chart(fig_hist, use_container_width=True)
+
+# ==========================================
+# TAB 3: Spread Comparison
+# ==========================================
+with tab3:
+    st.subheader("📊 Multi-Pair Spread Comparison")
     
     # User input for threshold
     spread_threshold = st.number_input(
         "Default selection threshold: Pairs with Current Spread < (%)", 
         value=10.0, 
         step=1.0,
-        help="Pairs with current spread below this threshold will be auto-selected"
+        help="Pairs with current spread below this threshold will be auto-selected",
+        key="spread_threshold_tab3"
     )
+    
+    # Get latest spreads for filtering
+    with st.spinner("Scanning spreads..."):
+        latest_spread_df_t3 = get_latest_spreads()
     
     # Filter Logic: Auto-select pairs with spread < user-defined threshold
     default_selection = []
-    if not latest_spread_df.empty:
-        low_spread_pairs = latest_spread_df[latest_spread_df['Current Spread (%)'] < spread_threshold]
+    if not latest_spread_df_t3.empty:
+        low_spread_pairs = latest_spread_df_t3[latest_spread_df_t3['Current Spread (%)'] < spread_threshold]
         default_selection = low_spread_pairs['Pair'].tolist()
         if not default_selection:
             default_selection = [list(AH_PAIRS.keys())[0]]
@@ -275,7 +413,8 @@ with tab1:
     selected_chart_pairs = st.multiselect(
         "Select Pairs to Compare", 
         options=list(AH_PAIRS.keys()),
-        default=default_selection
+        default=default_selection,
+        key="compare_pairs_tab3"
     )
     
     if selected_chart_pairs:
@@ -286,97 +425,31 @@ with tab1:
             if not df_p.empty:
                 df_p['A_USD'] = df_p['A_Local'] / df_p['USDCNH']
                 df_p['H_USD'] = df_p['H_Local'] / df_p['USDHKD']
-                spread_series = ( (df_p['A_USD'] / df_p['H_USD']) - 1 ) * 100
+                spread_series = ((df_p['A_USD'] / df_p['H_USD']) - 1) * 100
                 color_hex = NIPPON_COLORS[i % len(NIPPON_COLORS)]
-                fig_comp.add_trace(go.Scatter(x=df_p.index, y=spread_series, name=p, line=dict(color=color_hex, width=1.5)))
+                fig_comp.add_trace(go.Scatter(
+                    x=df_p.index, 
+                    y=spread_series, 
+                    name=p, 
+                    line=dict(color=color_hex, width=1.5)
+                ))
         
-        fig_comp.update_layout(title="Historical Spread (%) Comparison", template="seaborn", hovermode="x unified", height=500)
-        st.plotly_chart(fig_comp, use_container_width=True)
-    
-    st.divider()
-
-    # --- CURRENT SPREAD TABLE ---
-    st.write("#### 2. Current Spread Snapshot")
-    if not latest_spread_df.empty:
-        st.dataframe(
-            latest_spread_df.sort_values(by="Current Spread (%)").style.format({
-                "Current Spread (%)": "{:.2f}%",
-                "1D Change (%)": "{:.2f}%",
-                "5D Change (%)": "{:.2f}%",
-                "30D Change (%)": "{:.2f}%"
-            }).background_gradient(cmap="RdYlGn_r", subset=["Current Spread (%)"]),
-            use_container_width=True, height=600, hide_index=True
+        fig_comp.update_layout(
+            title="Historical Spread (%) Comparison",
+            template="seaborn", 
+            hovermode="x unified", 
+            height=550,
+            legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5)
         )
+        fig_comp.update_yaxes(title_text="Spread (%)")
+        st.plotly_chart(fig_comp, use_container_width=True)
     else:
-        st.warning("Could not fetch latest spreads.")
+        st.info("Select at least one pair to view the comparison chart.")
 
 # ==========================================
-# TAB 2: Single Pair (Visual Dashboard)
+# TAB 4: Correlation Analysis (ENHANCED)
 # ==========================================
-with tab2:
-    col_sel, _ = st.columns([1, 2])
-    with col_sel:
-        selected_pair = st.selectbox("Select AH Pair", list(AH_PAIRS.keys()), key="single_pair_sel")
-    pair_tickers = AH_PAIRS[selected_pair]
-
-    with st.spinner(f"Analyzing {selected_pair}..."):
-        raw_data = fetch_pair_data(pair_tickers['A'], pair_tickers['H'], start_date_input, date.today())
-        
-        if raw_data.empty:
-            st.error("No data found.")
-        else:
-            res_df, event_log, closed_trades = run_backtest(
-                raw_data, long_entry, long_exit, short_entry, short_exit, trade_size, enable_short
-            )
-            
-            total_pnl = res_df['Net_PnL'].iloc[-1]
-            roll_max = res_df['Net_PnL'].cummax()
-            dd_dollar = (res_df['Net_PnL'] - roll_max).min()
-            
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Net Profit", f"${total_pnl:,.0f}")
-            c2.metric("Max Drawdown ($)", f"${dd_dollar:,.0f}")
-            c3.metric("Total Trades", len(closed_trades))
-            if not closed_trades.empty:
-                hit_rate = len(closed_trades[closed_trades['PnL'] > 0]) / len(closed_trades)
-                c4.metric("Hit Rate", f"{hit_rate:.1%}")
-            else:
-                c4.metric("Hit Rate", "N/A")
-
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.6, 0.4],
-                                subplot_titles=("AH Spread & Thresholds", "Cumulative PnL ($)"))
-            
-            fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Spread_Pct'], name='Spread %', line=dict(color='#9E3D3F')), row=1, col=1)
-            fig.add_hline(y=long_entry, line_dash="dash", line_color="green", row=1, col=1)
-            fig.add_hline(y=long_exit, line_dash="dot", line_color="darkgreen", row=1, col=1)
-            if enable_short:
-                fig.add_hline(y=short_entry, line_dash="dash", line_color="red", row=1, col=1)
-                fig.add_hline(y=short_exit, line_dash="dot", line_color="darkred", row=1, col=1)
-
-            if not event_log.empty:
-                entries = event_log[event_log['Type'].str.contains('Entry')]
-                if not entries.empty:
-                    fig.add_trace(go.Scatter(x=entries['Date'], y=entries['Price'], mode='markers', name='Entry', marker=dict(size=10, color='orange')), row=1, col=1)
-
-            fig.add_trace(go.Scatter(x=res_df.index, y=res_df['Net_PnL'], name='PnL ($)', fill='tozeroy', line=dict(color='#2A5CAA')), row=2, col=1)
-            fig.update_layout(height=600, template="seaborn", margin=dict(l=40, r=40, t=20, b=40))
-            st.plotly_chart(fig, use_container_width=True)
-            
-            st.divider()
-            c_t1, c_t2 = st.columns(2)
-            with c_t1:
-                st.subheader("Recent Trades")
-                if not closed_trades.empty:
-                    st.dataframe(closed_trades.sort_values(by='Exit Date', ascending=False).style.format({"PnL": "${:,.0f}"}), use_container_width=True, hide_index=True)
-            with c_t2:
-                st.subheader("Event Log")
-                if not event_log.empty:
-                    st.dataframe(event_log.sort_values(by='Date', ascending=False).style.format({"Price": "{:.2f}%"}), use_container_width=True, hide_index=True)
-
-# ==========================================
-# TAB 3: Rolling Correlations (ENHANCED)
-# ==========================================
-with tab3:
+with tab4:
     st.subheader("🔄 Advanced Correlation & Sensitivity Analysis")
     st.caption("Deep dive into how A-Shares, H-Shares, and the AH Spread interact over time.")
     
@@ -552,7 +625,7 @@ with tab3:
             # Chart 1: A vs H Returns Correlation
             fig_ah = go.Figure()
             fig_ah.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Roll_Corr_AH'], 
-                                        name=f'{rolling_window}-Day Corr', line=dict(color='#2A5CAA', width=2)))
+                                        name=f'{rolling_window}-Day Corr', line=dict(color=NIPPON_RURI, width=2)))
             fig_ah.add_hline(y=corr_ah, line_dash="dash", line_color="gray", 
                             annotation_text=f"Avg: {corr_ah:.2f}")
             fig_ah.update_layout(
@@ -566,7 +639,7 @@ with tab3:
             with c_c1:
                 fig_sa = go.Figure()
                 fig_sa.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Roll_Corr_SprA'], 
-                                           name='Corr(Spread, A)', line=dict(color='#838B0D', width=1.5)))
+                                           name='Corr(Spread, A)', line=dict(color=NIPPON_KOKE, width=1.5)))
                 fig_sa.add_hline(y=0, line_dash="dot", line_color="gray")
                 fig_sa.update_layout(title="Spread Change vs A-Share Returns", 
                                     yaxis_range=[-1, 1], template="seaborn", height=300)
@@ -575,7 +648,7 @@ with tab3:
             with c_c2:
                 fig_sh = go.Figure()
                 fig_sh.add_trace(go.Scatter(x=df_corr.index, y=df_corr['Roll_Corr_SprH'], 
-                                           name='Corr(Spread, H)', line=dict(color='#C1328E', width=1.5)))
+                                           name='Corr(Spread, H)', line=dict(color=NIPPON_KOHBAI, width=1.5)))
                 fig_sh.add_hline(y=0, line_dash="dot", line_color="gray")
                 fig_sh.update_layout(title="Spread Change vs H-Share Returns", 
                                     yaxis_range=[-1, 1], template="seaborn", height=300)
@@ -617,7 +690,7 @@ with tab3:
             
             with col_lag1:
                 fig_lag1 = go.Figure()
-                fig_lag1.add_trace(go.Bar(x=lags, y=cross_corr_ah, marker_color='#2A5CAA', name='Cross-Corr'))
+                fig_lag1.add_trace(go.Bar(x=lags, y=cross_corr_ah, marker_color=NIPPON_RURI, name='Cross-Corr'))
                 fig_lag1.add_hline(y=0, line_color="gray")
                 fig_lag1.update_layout(
                     title="A-Share → H-Share Lead-Lag",
@@ -640,7 +713,7 @@ with tab3:
             
             with col_lag2:
                 fig_lag2 = go.Figure()
-                fig_lag2.add_trace(go.Bar(x=lags, y=cross_corr_a_spread, marker_color='#9E3D3F', name='Cross-Corr'))
+                fig_lag2.add_trace(go.Bar(x=lags, y=cross_corr_a_spread, marker_color=NIPPON_SUOH, name='Cross-Corr'))
                 fig_lag2.add_hline(y=0, line_color="gray")
                 fig_lag2.update_layout(
                     title="A-Share Returns → Spread Change Lead-Lag",
@@ -662,7 +735,826 @@ with tab3:
                     st.info(f"📌 A-share and spread move together (contemporaneous, corr: {best_corr2:.3f})")
             
             # ===========================================
-            # SECTION 4: SCATTER PLOTS & DISTRIBUTION
+            # SECTION 4: CONDITIONAL OUTPERFORMANCE ANALYSIS
+            # ===========================================
+            st.markdown("---")
+            st.markdown("### 🎯 Conditional Outperformance Analysis")
+            st.caption("When both markets move in the same direction, who tends to outperform?")
+            
+            # Calculate outperformance
+            df_clean['A_Outperformance'] = df_clean['Ret_A'] - df_clean['Ret_H']
+            
+            # Define regimes
+            both_up = (df_clean['Ret_A'] > 0) & (df_clean['Ret_H'] > 0)
+            both_down = (df_clean['Ret_A'] < 0) & (df_clean['Ret_H'] < 0)
+            a_up_h_down = (df_clean['Ret_A'] > 0) & (df_clean['Ret_H'] < 0)
+            a_down_h_up = (df_clean['Ret_A'] < 0) & (df_clean['Ret_H'] > 0)
+            
+            df_both_up = df_clean[both_up]
+            df_both_down = df_clean[both_down]
+            df_a_up_h_down = df_clean[a_up_h_down]
+            df_a_down_h_up = df_clean[a_down_h_up]
+            
+            # Calculate statistics for each regime
+            regimes_data = []
+            
+            if len(df_both_up) > 0:
+                avg_outperf_up = df_both_up['A_Outperformance'].mean()
+                win_rate_up = (df_both_up['A_Outperformance'] > 0).mean() * 100
+                t_stat_up, p_val_up = stats.ttest_1samp(df_both_up['A_Outperformance'], 0)
+                regimes_data.append({
+                    'Regime': '📈 Both Up',
+                    'Days': len(df_both_up),
+                    'Pct of Total': f"{len(df_both_up)/len(df_clean)*100:.1f}%",
+                    'Avg A Outperformance (%)': avg_outperf_up,
+                    'A Wins (%)': win_rate_up,
+                    'p-value': p_val_up,
+                    'Significant': '✓' if p_val_up < 0.05 else '✗'
+                })
+            
+            if len(df_both_down) > 0:
+                avg_outperf_down = df_both_down['A_Outperformance'].mean()
+                win_rate_down = (df_both_down['A_Outperformance'] > 0).mean() * 100
+                t_stat_down, p_val_down = stats.ttest_1samp(df_both_down['A_Outperformance'], 0)
+                regimes_data.append({
+                    'Regime': '📉 Both Down',
+                    'Days': len(df_both_down),
+                    'Pct of Total': f"{len(df_both_down)/len(df_clean)*100:.1f}%",
+                    'Avg A Outperformance (%)': avg_outperf_down,
+                    'A Wins (%)': win_rate_down,
+                    'p-value': p_val_down,
+                    'Significant': '✓' if p_val_down < 0.05 else '✗'
+                })
+            
+            if len(df_a_up_h_down) > 0:
+                regimes_data.append({
+                    'Regime': '🔀 A Up, H Down',
+                    'Days': len(df_a_up_h_down),
+                    'Pct of Total': f"{len(df_a_up_h_down)/len(df_clean)*100:.1f}%",
+                    'Avg A Outperformance (%)': df_a_up_h_down['A_Outperformance'].mean(),
+                    'A Wins (%)': 100.0,  # By definition
+                    'p-value': np.nan,
+                    'Significant': 'N/A'
+                })
+            
+            if len(df_a_down_h_up) > 0:
+                regimes_data.append({
+                    'Regime': '🔀 A Down, H Up',
+                    'Days': len(df_a_down_h_up),
+                    'Pct of Total': f"{len(df_a_down_h_up)/len(df_clean)*100:.1f}%",
+                    'Avg A Outperformance (%)': df_a_down_h_up['A_Outperformance'].mean(),
+                    'A Wins (%)': 0.0,  # By definition
+                    'p-value': np.nan,
+                    'Significant': 'N/A'
+                })
+            
+            regime_summary_df = pd.DataFrame(regimes_data)
+            
+            # Display summary table
+            col_regime_tbl, col_regime_chart = st.columns([1, 1])
+            
+            with col_regime_tbl:
+                st.markdown("#### Summary by Market Regime")
+                st.dataframe(
+                    regime_summary_df.style.format({
+                        'Avg A Outperformance (%)': '{:.3f}',
+                        'A Wins (%)': '{:.1f}',
+                        'p-value': '{:.4f}'
+                    }).background_gradient(
+                        cmap="RdYlGn", 
+                        subset=['Avg A Outperformance (%)'],
+                        vmin=-0.5, vmax=0.5
+                    ),
+                    use_container_width=True, hide_index=True
+                )
+                
+                # Key insight
+                if len(df_both_up) > 0 and len(df_both_down) > 0:
+                    avg_up = df_both_up['A_Outperformance'].mean()
+                    avg_down = df_both_down['A_Outperformance'].mean()
+                    
+                    st.markdown("#### 💡 Key Insights")
+                    
+                    if avg_up > 0 and p_val_up < 0.05:
+                        st.success(f"**Bull Days:** A-shares outperform H by **{avg_up:.3f}%** on average (statistically significant)")
+                    elif avg_up < 0 and p_val_up < 0.05:
+                        st.error(f"**Bull Days:** H-shares outperform A by **{-avg_up:.3f}%** on average (statistically significant)")
+                    else:
+                        st.info(f"**Bull Days:** Average A outperformance is {avg_up:.3f}% (not statistically significant)")
+                    
+                    if avg_down > 0 and p_val_down < 0.05:
+                        st.success(f"**Bear Days:** A-shares outperform (fall less) by **{avg_down:.3f}%** on average (statistically significant)")
+                    elif avg_down < 0 and p_val_down < 0.05:
+                        st.error(f"**Bear Days:** H-shares outperform (fall less) by **{-avg_down:.3f}%** on average (statistically significant)")
+                    else:
+                        st.info(f"**Bear Days:** Average A outperformance is {avg_down:.3f}% (not statistically significant)")
+            
+            with col_regime_chart:
+                # Quadrant scatter plot
+                fig_quadrant = go.Figure()
+                
+                # Color by regime
+                colors_regime = []
+                for i in range(len(df_clean)):
+                    if df_clean['Ret_A'].iloc[i] > 0 and df_clean['Ret_H'].iloc[i] > 0:
+                        colors_regime.append('#2E7D32')  # Green - both up
+                    elif df_clean['Ret_A'].iloc[i] < 0 and df_clean['Ret_H'].iloc[i] < 0:
+                        colors_regime.append('#C62828')  # Red - both down
+                    else:
+                        colors_regime.append('#757575')  # Gray - divergent
+                
+                fig_quadrant.add_trace(go.Scatter(
+                    x=df_clean['Ret_H'], y=df_clean['Ret_A'],
+                    mode='markers',
+                    marker=dict(color=colors_regime, size=6, opacity=0.6),
+                    text=[f"A: {a:.2f}%, H: {h:.2f}%<br>A-H: {o:.2f}%" 
+                          for a, h, o in zip(df_clean['Ret_A'], df_clean['Ret_H'], df_clean['A_Outperformance'])],
+                    hoverinfo='text',
+                    name='Daily Returns'
+                ))
+                
+                # Add diagonal line (A = H)
+                max_val = max(abs(df_clean['Ret_A'].max()), abs(df_clean['Ret_H'].max()),
+                             abs(df_clean['Ret_A'].min()), abs(df_clean['Ret_H'].min()))
+                fig_quadrant.add_trace(go.Scatter(
+                    x=[-max_val, max_val], y=[-max_val, max_val],
+                    mode='lines', line=dict(color='gray', dash='dash', width=1),
+                    name='A = H line'
+                ))
+                
+                # Add quadrant lines
+                fig_quadrant.add_hline(y=0, line_color="black", line_width=0.5)
+                fig_quadrant.add_vline(x=0, line_color="black", line_width=0.5)
+                
+                fig_quadrant.update_layout(
+                    title="Return Quadrant Analysis<br><sub>Green=Both Up, Red=Both Down, Gray=Divergent</sub>",
+                    xaxis_title="H-Share Return (%)",
+                    yaxis_title="A-Share Return (%)",
+                    template="seaborn", height=400,
+                    showlegend=False
+                )
+                st.plotly_chart(fig_quadrant, use_container_width=True)
+            
+            # Distribution of outperformance by regime
+            st.markdown("#### Distribution of A-Share Outperformance by Regime")
+            
+            col_dist1, col_dist2 = st.columns(2)
+            
+            with col_dist1:
+                if len(df_both_up) > 5:
+                    fig_dist_up = go.Figure()
+                    fig_dist_up.add_trace(go.Histogram(
+                        x=df_both_up['A_Outperformance'], 
+                        nbinsx=30,
+                        marker_color='#2E7D32',
+                        name='Both Up Days'
+                    ))
+                    fig_dist_up.add_vline(x=0, line_dash="dash", line_color="black")
+                    fig_dist_up.add_vline(x=df_both_up['A_Outperformance'].mean(), 
+                                         line_dash="solid", line_color="red",
+                                         annotation_text=f"Mean: {df_both_up['A_Outperformance'].mean():.3f}%")
+                    fig_dist_up.update_layout(
+                        title="📈 Both Up Days: A Outperformance Distribution",
+                        xaxis_title="A Return - H Return (%)",
+                        yaxis_title="Frequency",
+                        template="seaborn", height=300
+                    )
+                    st.plotly_chart(fig_dist_up, use_container_width=True)
+            
+            with col_dist2:
+                if len(df_both_down) > 5:
+                    fig_dist_down = go.Figure()
+                    fig_dist_down.add_trace(go.Histogram(
+                        x=df_both_down['A_Outperformance'], 
+                        nbinsx=30,
+                        marker_color='#C62828',
+                        name='Both Down Days'
+                    ))
+                    fig_dist_down.add_vline(x=0, line_dash="dash", line_color="black")
+                    fig_dist_down.add_vline(x=df_both_down['A_Outperformance'].mean(), 
+                                           line_dash="solid", line_color="blue",
+                                           annotation_text=f"Mean: {df_both_down['A_Outperformance'].mean():.3f}%")
+                    fig_dist_down.update_layout(
+                        title="📉 Both Down Days: A Outperformance Distribution",
+                        xaxis_title="A Return - H Return (%)",
+                        yaxis_title="Frequency",
+                        template="seaborn", height=300
+                    )
+                    st.plotly_chart(fig_dist_down, use_container_width=True)
+            
+            # Trading implication
+            with st.expander("📖 Trading Implications"):
+                st.markdown("""
+                **How to interpret this analysis:**
+                
+                1. **If A outperforms on Bull Days (Both Up):**
+                   - A-shares have higher beta to positive sentiment
+                   - In rallies, A-shares tend to rise MORE than H-shares
+                   - Spread WIDENS during bull markets
+                   
+                2. **If H outperforms on Bull Days:**
+                   - H-shares capture more upside
+                   - Spread NARROWS during bull markets
+                   - Potential for spread compression trades
+                
+                3. **If A outperforms on Bear Days (Both Down):**
+                   - A-shares are more defensive (fall less)
+                   - Spread WIDENS during selloffs
+                   - A-shares provide relative downside protection
+                
+                4. **If H outperforms on Bear Days:**
+                   - H-shares fall less in corrections
+                   - Spread NARROWS during selloffs
+                   - H-shares are the defensive leg
+                
+                **Strategic Use:**
+                - If A consistently outperforms in BOTH regimes → structural A premium justified
+                - If H outperforms in bull, A outperforms in bear → spread mean-reverts
+                - Asymmetric patterns suggest tactical timing opportunities
+                """)
+            
+            # ===========================================
+            # SECTION 4B: MULTI-HORIZON OUTPERFORMANCE (NON-OVERLAPPING)
+            # ===========================================
+            st.markdown("---")
+            st.markdown("### 📅 Multi-Horizon Conditional Outperformance (Non-Overlapping Periods)")
+            st.caption("Slicing data into distinct, non-overlapping periods for statistically valid analysis")
+            
+            # User selectable period length
+            col_period_select, col_analysis_mode = st.columns(2)
+            with col_period_select:
+                period_options = [5, 10, 20, 60]
+                selected_period = st.selectbox(
+                    "Period length (trading days)", 
+                    options=period_options,
+                    index=2,  # Default to 20
+                    help="Data will be sliced into non-overlapping chunks of this size"
+                )
+            with col_analysis_mode:
+                show_all_periods = st.checkbox("Show all individual periods", value=False,
+                                              help="Display each period's data in a table")
+            
+            # Slice data into non-overlapping periods
+            df_periods = df_clean.copy()
+            n_periods = len(df_periods) // selected_period
+            
+            if n_periods >= 3:
+                # Create period chunks
+                period_data = []
+                
+                for i in range(n_periods):
+                    start_idx = i * selected_period
+                    end_idx = (i + 1) * selected_period
+                    chunk = df_periods.iloc[start_idx:end_idx]
+                    
+                    if len(chunk) == selected_period:
+                        period_start = chunk.index[0]
+                        period_end = chunk.index[-1]
+                        
+                        # Calculate cumulative returns for this period
+                        cum_a = chunk['Ret_A'].sum()
+                        cum_h = chunk['Ret_H'].sum()
+                        outperf = cum_a - cum_h
+                        
+                        # Classify regime
+                        if cum_a > 0 and cum_h > 0:
+                            regime = '📈 Both Up'
+                        elif cum_a < 0 and cum_h < 0:
+                            regime = '📉 Both Down'
+                        elif cum_a > 0 and cum_h < 0:
+                            regime = '🔀 A Up, H Down'
+                        else:
+                            regime = '🔀 A Down, H Up'
+                        
+                        period_data.append({
+                            'Period #': i + 1,
+                            'Start': period_start,
+                            'End': period_end,
+                            'A Return (%)': cum_a,
+                            'H Return (%)': cum_h,
+                            'A Outperformance (%)': outperf,
+                            'Regime': regime
+                        })
+                
+                periods_df = pd.DataFrame(period_data)
+                
+                st.info(f"📊 Data sliced into **{len(periods_df)} non-overlapping {selected_period}-day periods** (from {periods_df['Start'].iloc[0].strftime('%Y-%m-%d')} to {periods_df['End'].iloc[-1].strftime('%Y-%m-%d')})")
+                
+                # Summary statistics by regime
+                st.markdown("#### Summary by Regime (Non-Overlapping Periods)")
+                
+                regime_summary = []
+                for regime in ['📈 Both Up', '📉 Both Down', '🔀 A Up, H Down', '🔀 A Down, H Up']:
+                    regime_df = periods_df[periods_df['Regime'] == regime]
+                    if len(regime_df) >= 1:
+                        outperf_series = regime_df['A Outperformance (%)']
+                        avg_a = regime_df['A Return (%)'].mean()
+                        avg_h = regime_df['H Return (%)'].mean()
+                        avg_outperf = outperf_series.mean()
+                        win_rate = (outperf_series > 0).mean() * 100
+                        
+                        # Statistical test (only if enough observations)
+                        if len(regime_df) >= 3:
+                            t_stat, p_val = stats.ttest_1samp(outperf_series, 0)
+                        else:
+                            p_val = np.nan
+                        
+                        regime_summary.append({
+                            'Regime': regime,
+                            'Periods': len(regime_df),
+                            'Avg A Return (%)': avg_a,
+                            'Avg H Return (%)': avg_h,
+                            'Avg A Outperf (%)': avg_outperf,
+                            'A Wins (%)': win_rate,
+                            'p-value': p_val,
+                            'Sig': '✓' if p_val < 0.05 else ('—' if np.isnan(p_val) else '')
+                        })
+                
+                summary_df = pd.DataFrame(regime_summary)
+                
+                col_summary, col_chart = st.columns([1, 1])
+                
+                with col_summary:
+                    st.dataframe(
+                        summary_df.style.format({
+                            'Avg A Return (%)': '{:.2f}',
+                            'Avg H Return (%)': '{:.2f}',
+                            'Avg A Outperf (%)': '{:.2f}',
+                            'A Wins (%)': '{:.1f}',
+                            'p-value': '{:.4f}'
+                        }).background_gradient(
+                            cmap="RdYlGn",
+                            subset=['Avg A Outperf (%)'],
+                            vmin=-5, vmax=5
+                        ),
+                        use_container_width=True, hide_index=True
+                    )
+                    
+                    # Note about sample size
+                    co_movement_periods = summary_df[summary_df['Regime'].isin(['📈 Both Up', '📉 Both Down'])]['Periods'].sum()
+                    st.caption(f"⚠️ {co_movement_periods} co-movement periods (Both Up + Both Down) — small samples require cautious interpretation")
+                
+                with col_chart:
+                    # Scatter plot of all periods
+                    fig_scatter_periods = go.Figure()
+                    
+                    colors_map = {
+                        '📈 Both Up': '#2E7D32',
+                        '📉 Both Down': '#C62828',
+                        '🔀 A Up, H Down': '#1565C0',
+                        '🔀 A Down, H Up': '#FF8F00'
+                    }
+                    
+                    for regime in colors_map.keys():
+                        regime_df = periods_df[periods_df['Regime'] == regime]
+                        if len(regime_df) > 0:
+                            fig_scatter_periods.add_trace(go.Scatter(
+                                x=regime_df['H Return (%)'],
+                                y=regime_df['A Return (%)'],
+                                mode='markers',
+                                name=regime,
+                                marker=dict(color=colors_map[regime], size=10, opacity=0.7),
+                                text=[f"Period {p}<br>{s.strftime('%m/%d')}-{e.strftime('%m/%d')}<br>A: {a:.1f}%, H: {h:.1f}%" 
+                                      for p, s, e, a, h in zip(regime_df['Period #'], regime_df['Start'], 
+                                                               regime_df['End'], regime_df['A Return (%)'], 
+                                                               regime_df['H Return (%)'])],
+                                hoverinfo='text'
+                            ))
+                    
+                    # Add diagonal line
+                    max_val = max(abs(periods_df['A Return (%)'].max()), abs(periods_df['H Return (%)'].max()),
+                                 abs(periods_df['A Return (%)'].min()), abs(periods_df['H Return (%)'].min()))
+                    fig_scatter_periods.add_trace(go.Scatter(
+                        x=[-max_val*1.1, max_val*1.1], y=[-max_val*1.1, max_val*1.1],
+                        mode='lines', line=dict(color='gray', dash='dash', width=1),
+                        name='A = H', showlegend=False
+                    ))
+                    
+                    fig_scatter_periods.add_hline(y=0, line_color="black", line_width=0.5)
+                    fig_scatter_periods.add_vline(x=0, line_color="black", line_width=0.5)
+                    
+                    fig_scatter_periods.update_layout(
+                        title=f"All {selected_period}-Day Periods<br><sub>Each dot = one non-overlapping period</sub>",
+                        xaxis_title=f"H-Share {selected_period}D Return (%)",
+                        yaxis_title=f"A-Share {selected_period}D Return (%)",
+                        template="seaborn",
+                        height=400
+                    )
+                    st.plotly_chart(fig_scatter_periods, use_container_width=True)
+                
+                # Key findings for co-movement regimes
+                st.markdown("#### 💡 Key Findings (Co-Movement Periods Only)")
+                
+                both_up_df = periods_df[periods_df['Regime'] == '📈 Both Up']
+                both_down_df = periods_df[periods_df['Regime'] == '📉 Both Down']
+                
+                col_up, col_down = st.columns(2)
+                
+                with col_up:
+                    if len(both_up_df) >= 1:
+                        avg_a = both_up_df['A Return (%)'].mean()
+                        avg_h = both_up_df['H Return (%)'].mean()
+                        avg_outperf = both_up_df['A Outperformance (%)'].mean()
+                        win_rate = (both_up_df['A Outperformance (%)'] > 0).mean() * 100
+                        
+                        st.markdown(f"**📈 Bull Periods ({len(both_up_df)} periods)**")
+                        st.markdown(f"- Avg A Return: **{avg_a:.2f}%**")
+                        st.markdown(f"- Avg H Return: **{avg_h:.2f}%**")
+                        
+                        if avg_outperf > 0:
+                            st.success(f"A outperforms by **{avg_outperf:.2f}%** on average")
+                            st.markdown(f"A wins **{win_rate:.0f}%** of bull periods")
+                        else:
+                            st.error(f"H outperforms by **{-avg_outperf:.2f}%** on average")
+                            st.markdown(f"A wins only **{win_rate:.0f}%** of bull periods")
+                    else:
+                        st.info("No 'Both Up' periods in this data range")
+                
+                with col_down:
+                    if len(both_down_df) >= 1:
+                        avg_a = both_down_df['A Return (%)'].mean()
+                        avg_h = both_down_df['H Return (%)'].mean()
+                        avg_outperf = both_down_df['A Outperformance (%)'].mean()
+                        win_rate = (both_down_df['A Outperformance (%)'] > 0).mean() * 100
+                        
+                        st.markdown(f"**📉 Bear Periods ({len(both_down_df)} periods)**")
+                        st.markdown(f"- Avg A Return: **{avg_a:.2f}%**")
+                        st.markdown(f"- Avg H Return: **{avg_h:.2f}%**")
+                        
+                        if avg_outperf > 0:
+                            st.success(f"A falls less by **{avg_outperf:.2f}%** on average")
+                            st.markdown(f"A more defensive in **{win_rate:.0f}%** of bear periods")
+                        else:
+                            st.error(f"H falls less by **{-avg_outperf:.2f}%** on average")
+                            st.markdown(f"A more defensive in only **{win_rate:.0f}%** of bear periods")
+                    else:
+                        st.info("No 'Both Down' periods in this data range")
+                
+                # Individual periods table
+                if show_all_periods:
+                    st.markdown("---")
+                    st.markdown("#### All Individual Periods")
+                    
+                    display_df = periods_df.copy()
+                    display_df['Start'] = display_df['Start'].dt.strftime('%Y-%m-%d')
+                    display_df['End'] = display_df['End'].dt.strftime('%Y-%m-%d')
+                    
+                    st.dataframe(
+                        display_df.style.format({
+                            'A Return (%)': '{:.2f}',
+                            'H Return (%)': '{:.2f}',
+                            'A Outperformance (%)': '{:.2f}'
+                        }).background_gradient(
+                            cmap="RdYlGn",
+                            subset=['A Outperformance (%)'],
+                            vmin=-10, vmax=10
+                        ),
+                        use_container_width=True, hide_index=True,
+                        height=400
+                    )
+                
+                # Timeline visualization
+                st.markdown("---")
+                st.markdown("#### Period-by-Period Timeline")
+                
+                fig_bars = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1,
+                                        subplot_titles=(f"{selected_period}-Day Period Returns", 
+                                                       "A Outperformance (A - H)"))
+                
+                # Period returns
+                fig_bars.add_trace(go.Bar(
+                    x=periods_df['Period #'],
+                    y=periods_df['A Return (%)'],
+                    name='A Return',
+                    marker_color=NIPPON_SUOH
+                ), row=1, col=1)
+                
+                fig_bars.add_trace(go.Bar(
+                    x=periods_df['Period #'],
+                    y=periods_df['H Return (%)'],
+                    name='H Return',
+                    marker_color=NIPPON_RURI
+                ), row=1, col=1)
+                
+                # Outperformance bars colored by who won
+                outperf_colors = ['#2E7D32' if v > 0 else '#C62828' for v in periods_df['A Outperformance (%)']]
+                fig_bars.add_trace(go.Bar(
+                    x=periods_df['Period #'],
+                    y=periods_df['A Outperformance (%)'],
+                    name='A Outperf',
+                    marker_color=outperf_colors,
+                    text=[f"{v:.1f}%" for v in periods_df['A Outperformance (%)']],
+                    textposition='outside'
+                ), row=2, col=1)
+                
+                fig_bars.add_hline(y=0, line_dash="dot", line_color="gray", row=1, col=1)
+                fig_bars.add_hline(y=0, line_dash="dot", line_color="gray", row=2, col=1)
+                
+                fig_bars.update_layout(
+                    height=500, 
+                    template="seaborn", 
+                    barmode='group',
+                    hovermode="x unified"
+                )
+                fig_bars.update_xaxes(title_text="Period #", row=2, col=1)
+                
+                st.plotly_chart(fig_bars, use_container_width=True)
+                
+                # Interpretation
+                with st.expander("📖 Why non-overlapping periods matter"):
+                    st.markdown(f"""
+                    **The Problem with Rolling Windows:**
+                    
+                    If you use rolling 20-day windows on 120 trading days, you get ~100 "observations."
+                    But these overlap heavily — window 1 (days 1-20) shares 19 days with window 2 (days 2-21).
+                    
+                    This causes:
+                    - **Autocorrelation**: Observations are not independent
+                    - **Inflated sample size**: You think you have 100 samples, but really ~6 independent periods
+                    - **Invalid p-values**: t-tests assume independent observations
+                    
+                    **The Solution: Non-Overlapping Periods**
+                    
+                    Slicing into distinct chunks (days 1-20, 21-40, 41-60, etc.) gives you:
+                    - **Independent observations**: Each period's data is unique
+                    - **Valid statistics**: t-tests and confidence intervals are meaningful
+                    - **Fewer but honest samples**: {len(periods_df)} true observations
+                    
+                    **Trade-off:**
+                    - Fewer observations = wider confidence intervals
+                    - But the conclusions are statistically valid
+                    - Use longer date ranges to get more non-overlapping periods
+                    """)
+                
+            else:
+                st.warning(f"Need at least {selected_period * 3} days of data for meaningful analysis. Current data has {len(df_periods)} days.")
+            
+            # Keep rolling analysis as secondary option
+            st.markdown("---")
+            with st.expander("📊 Rolling Window Analysis (for reference - overlapping periods)"):
+                st.caption("⚠️ Uses overlapping periods - statistics may be inflated. Use for pattern visualization, not statistical inference.")
+                
+                selected_lookbacks = [5, 20]
+                
+                # Calculate cumulative returns for each lookback
+                for lb in selected_lookbacks:
+                    df_clean[f'Cum_A_{lb}d'] = df_clean['Ret_A'].rolling(lb).sum()
+                    df_clean[f'Cum_H_{lb}d'] = df_clean['Ret_H'].rolling(lb).sum()
+                    df_clean[f'Cum_Outperf_{lb}d'] = df_clean[f'Cum_A_{lb}d'] - df_clean[f'Cum_H_{lb}d']
+                
+                # Build analysis for each lookback period
+                multi_horizon_results = []
+                
+                for lb in selected_lookbacks:
+                    df_lb = df_clean.dropna(subset=[f'Cum_A_{lb}d', f'Cum_H_{lb}d', f'Cum_Outperf_{lb}d'])
+                    
+                    if len(df_lb) < 20:
+                        continue
+                    
+                    # Define regimes based on cumulative returns
+                    both_up_lb = (df_lb[f'Cum_A_{lb}d'] > 0) & (df_lb[f'Cum_H_{lb}d'] > 0)
+                    both_down_lb = (df_lb[f'Cum_A_{lb}d'] < 0) & (df_lb[f'Cum_H_{lb}d'] < 0)
+                    
+                    df_lb_up = df_lb[both_up_lb]
+                    df_lb_down = df_lb[both_down_lb]
+                    
+                    # Both Up regime - who gained more?
+                    if len(df_lb_up) >= 10:
+                        outperf = df_lb_up[f'Cum_Outperf_{lb}d']
+                        avg_outperf = outperf.mean()
+                        avg_a = df_lb_up[f'Cum_A_{lb}d'].mean()
+                        avg_h = df_lb_up[f'Cum_H_{lb}d'].mean()
+                        win_rate = (outperf > 0).mean() * 100
+                        t_stat, p_val = stats.ttest_1samp(outperf.dropna(), 0)
+                        
+                        multi_horizon_results.append({
+                            'Period': f'{lb}D',
+                            'Regime': '📈 Both Up',
+                            'Observations': len(df_lb_up),
+                            'Avg A Return (%)': avg_a,
+                            'Avg H Return (%)': avg_h,
+                            'A Outperformance (%)': avg_outperf,
+                            'A Wins (%)': win_rate,
+                            'p-value': p_val,
+                            'Sig': '✓' if p_val < 0.05 else ''
+                        })
+                    
+                    # Both Down regime - who fell less?
+                    if len(df_lb_down) >= 10:
+                        outperf = df_lb_down[f'Cum_Outperf_{lb}d']
+                        avg_outperf = outperf.mean()
+                        avg_a = df_lb_down[f'Cum_A_{lb}d'].mean()
+                        avg_h = df_lb_down[f'Cum_H_{lb}d'].mean()
+                        win_rate = (outperf > 0).mean() * 100  # A fell less = positive outperformance
+                        t_stat, p_val = stats.ttest_1samp(outperf.dropna(), 0)
+                        
+                        multi_horizon_results.append({
+                            'Period': f'{lb}D',
+                            'Regime': '📉 Both Down',
+                            'Observations': len(df_lb_down),
+                            'Avg A Return (%)': avg_a,
+                            'Avg H Return (%)': avg_h,
+                            'A Outperformance (%)': avg_outperf,
+                            'A Wins (%)': win_rate,
+                            'p-value': p_val,
+                            'Sig': '✓' if p_val < 0.05 else ''
+                        })
+                
+                if multi_horizon_results:
+                    multi_df = pd.DataFrame(multi_horizon_results)
+                    
+                    st.markdown("#### Summary: Who Moves More During Co-Movement Periods?")
+                    st.dataframe(
+                        multi_df.style.format({
+                            'Avg A Return (%)': '{:.2f}',
+                            'Avg H Return (%)': '{:.2f}',
+                            'A Outperformance (%)': '{:.2f}',
+                            'A Wins (%)': '{:.1f}',
+                            'p-value': '{:.4f}'
+                        }).background_gradient(
+                            cmap="RdYlGn",
+                            subset=['A Outperformance (%)'],
+                            vmin=-3, vmax=3
+                        ),
+                        use_container_width=True, hide_index=True
+                    )
+                    
+                    # Visual comparison
+                    col_mh_chart1, col_mh_chart2 = st.columns(2)
+                    
+                    with col_mh_chart1:
+                        # Bar chart: A vs H average returns by regime
+                        fig_compare = go.Figure()
+                        
+                        for regime in ['📈 Both Up', '📉 Both Down']:
+                            regime_data = multi_df[multi_df['Regime'] == regime]
+                            if len(regime_data) > 0:
+                                fig_compare.add_trace(go.Bar(
+                                    name=f'{regime} - A',
+                                    x=regime_data['Period'],
+                                    y=regime_data['Avg A Return (%)'],
+                                    marker_color=NIPPON_SUOH if regime == '📈 Both Up' else NIPPON_KOHBAI,
+                                    offsetgroup=regime
+                                ))
+                                fig_compare.add_trace(go.Bar(
+                                    name=f'{regime} - H',
+                                    x=regime_data['Period'],
+                                    y=regime_data['Avg H Return (%)'],
+                                    marker_color=NIPPON_RURI if regime == '📈 Both Up' else NIPPON_WASURENAGUSA,
+                                    offsetgroup=regime
+                                ))
+                        
+                        fig_compare.update_layout(
+                            title="Average Returns: A vs H<br><sub>During Co-Movement Periods</sub>",
+                            xaxis_title="Lookback Period",
+                            yaxis_title="Average Return (%)",
+                            barmode='group',
+                            template="seaborn",
+                            height=400
+                        )
+                        st.plotly_chart(fig_compare, use_container_width=True)
+                    
+                    with col_mh_chart2:
+                        # Bar chart: A Outperformance
+                        fig_outperf = go.Figure()
+                        
+                        up_data = multi_df[multi_df['Regime'] == '📈 Both Up']
+                        down_data = multi_df[multi_df['Regime'] == '📉 Both Down']
+                        
+                        if len(up_data) > 0:
+                            colors_up = ['#2E7D32' if v > 0 else '#C62828' for v in up_data['A Outperformance (%)']]
+                            fig_outperf.add_trace(go.Bar(
+                                name='Both Up Periods',
+                                x=[f"{p} Up" for p in up_data['Period']],
+                                y=up_data['A Outperformance (%)'],
+                                marker_color=colors_up,
+                                text=[f"{v:.2f}%" for v in up_data['A Outperformance (%)']],
+                                textposition='outside'
+                            ))
+                        
+                        if len(down_data) > 0:
+                            colors_down = ['#2E7D32' if v > 0 else '#C62828' for v in down_data['A Outperformance (%)']]
+                            fig_outperf.add_trace(go.Bar(
+                                name='Both Down Periods',
+                                x=[f"{p} Down" for p in down_data['Period']],
+                                y=down_data['A Outperformance (%)'],
+                                marker_color=colors_down,
+                                text=[f"{v:.2f}%" for v in down_data['A Outperformance (%)']],
+                                textposition='outside'
+                            ))
+                        
+                        fig_outperf.add_hline(y=0, line_dash="dash", line_color="gray")
+                        fig_outperf.update_layout(
+                            title="A-Share Outperformance (A - H)<br><sub>Green = A wins, Red = H wins</sub>",
+                            xaxis_title="Period & Regime",
+                            yaxis_title="A Outperformance (%)",
+                            showlegend=False,
+                            template="seaborn",
+                            height=400
+                        )
+                        st.plotly_chart(fig_outperf, use_container_width=True)
+                    
+                    # Key insights
+                    st.markdown("#### 💡 Key Findings")
+                    
+                    for lb in selected_lookbacks:
+                        lb_data = multi_df[multi_df['Period'] == f'{lb}D']
+                        if len(lb_data) == 0:
+                            continue
+                        
+                        st.markdown(f"**{lb}-Day Periods:**")
+                        
+                        up_row = lb_data[lb_data['Regime'] == '📈 Both Up']
+                        down_row = lb_data[lb_data['Regime'] == '📉 Both Down']
+                        
+                        if len(up_row) > 0:
+                            row = up_row.iloc[0]
+                            outperf = row['A Outperformance (%)']
+                            sig = row['p-value'] < 0.05
+                            sig_text = " **(statistically significant)**" if sig else " (not significant)"
+                            if outperf > 0:
+                                st.success(f"📈 **Bull {lb}D**: When both rally, A gains **{row['Avg A Return (%)']:.2f}%** vs H's **{row['Avg H Return (%)']:.2f}%** → A outperforms by **{outperf:.2f}%**{sig_text}")
+                            else:
+                                st.error(f"📈 **Bull {lb}D**: When both rally, A gains **{row['Avg A Return (%)']:.2f}%** vs H's **{row['Avg H Return (%)']:.2f}%** → H outperforms by **{-outperf:.2f}%**{sig_text}")
+                        
+                        if len(down_row) > 0:
+                            row = down_row.iloc[0]
+                            outperf = row['A Outperformance (%)']
+                            sig = row['p-value'] < 0.05
+                            sig_text = " **(statistically significant)**" if sig else " (not significant)"
+                            if outperf > 0:
+                                st.success(f"📉 **Bear {lb}D**: When both fall, A loses **{row['Avg A Return (%)']:.2f}%** vs H's **{row['Avg H Return (%)']:.2f}%** → A falls less by **{outperf:.2f}%**{sig_text}")
+                            else:
+                                st.error(f"📉 **Bear {lb}D**: When both fall, A loses **{row['Avg A Return (%)']:.2f}%** vs H's **{row['Avg H Return (%)']:.2f}%** → H falls less by **{-outperf:.2f}%**{sig_text}")
+                    
+                    # Time series visualization
+                    st.markdown("---")
+                    st.markdown("#### Regime Timeline")
+                    
+                    viz_lookback = st.selectbox("Visualize regime for lookback:", selected_lookbacks, key="viz_lb")
+                    
+                    df_viz = df_clean.dropna(subset=[f'Cum_A_{viz_lookback}d', f'Cum_H_{viz_lookback}d'])
+                    
+                    # Create regime indicator
+                    regime_colors = []
+                    for idx in df_viz.index:
+                        cum_a = df_viz.loc[idx, f'Cum_A_{viz_lookback}d']
+                        cum_h = df_viz.loc[idx, f'Cum_H_{viz_lookback}d']
+                        if cum_a > 0 and cum_h > 0:
+                            regime_colors.append('#2E7D32')
+                        elif cum_a < 0 and cum_h < 0:
+                            regime_colors.append('#C62828')
+                        elif cum_a > 0 and cum_h < 0:
+                            regime_colors.append('#1565C0')
+                        else:
+                            regime_colors.append('#FF8F00')
+                    
+                    fig_timeline = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                                                 row_heights=[0.4, 0.3, 0.3],
+                                                 subplot_titles=(f"{viz_lookback}-Day Cumulative Returns", 
+                                                                f"{viz_lookback}-Day A Outperformance",
+                                                                "AH Spread (%)"))
+                    
+                    fig_timeline.add_trace(go.Scatter(
+                        x=df_viz.index, y=df_viz[f'Cum_A_{viz_lookback}d'],
+                        name=f'A {viz_lookback}D Cum Ret', line=dict(color=NIPPON_SUOH, width=1.5)
+                    ), row=1, col=1)
+                    
+                    fig_timeline.add_trace(go.Scatter(
+                        x=df_viz.index, y=df_viz[f'Cum_H_{viz_lookback}d'],
+                        name=f'H {viz_lookback}D Cum Ret', line=dict(color=NIPPON_RURI, width=1.5)
+                    ), row=1, col=1)
+                    
+                    fig_timeline.add_hline(y=0, line_dash="dot", line_color="gray", row=1, col=1)
+                    
+                    # Outperformance
+                    fig_timeline.add_trace(go.Scatter(
+                        x=df_viz.index, y=df_viz[f'Cum_Outperf_{viz_lookback}d'],
+                        name=f'A Outperformance', 
+                        fill='tozeroy',
+                        line=dict(color=NIPPON_KOKE, width=1)
+                    ), row=2, col=1)
+                    fig_timeline.add_hline(y=0, line_dash="dot", line_color="gray", row=2, col=1)
+                    
+                    # Spread with regime coloring
+                    fig_timeline.add_trace(go.Scatter(
+                        x=df_viz.index, y=df_viz['Spread_Pct'],
+                        name='Spread %', 
+                        mode='markers+lines',
+                        marker=dict(color=regime_colors, size=4),
+                        line=dict(color='gray', width=0.5)
+                    ), row=3, col=1)
+                    
+                    fig_timeline.update_layout(height=600, template="seaborn", hovermode="x unified")
+                    st.plotly_chart(fig_timeline, use_container_width=True)
+                    
+                    # Interpretation (as caption instead of nested expander)
+                    st.caption("📖 **Interpretation:** Positive lag = A leads. Green = Both Up, Red = Both Down. A Outperformance = A Return - H Return.")
+                else:
+                    st.warning("Not enough data for multi-horizon analysis. Try a shorter lookback or more historical data.")
+            
+            # ===========================================
+            # SECTION 5: SCATTER PLOTS & DISTRIBUTION
             # ===========================================
             st.markdown("---")
             st.markdown("### 🔬 Relationship Visualization")
@@ -674,7 +1566,7 @@ with tab3:
                 fig_scatter1 = go.Figure()
                 fig_scatter1.add_trace(go.Scatter(
                     x=df_clean['Ret_A'], y=df_clean['Ret_Spread'],
-                    mode='markers', marker=dict(color='#2A5CAA', size=5, opacity=0.5),
+                    mode='markers', marker=dict(color=NIPPON_SUOH, size=5, opacity=0.5),
                     name='Daily observations'
                 ))
                 # Add regression line
@@ -697,7 +1589,7 @@ with tab3:
                 fig_scatter2 = go.Figure()
                 fig_scatter2.add_trace(go.Scatter(
                     x=df_clean['Ret_H'], y=df_clean['Ret_Spread'],
-                    mode='markers', marker=dict(color='#C1328E', size=5, opacity=0.5),
+                    mode='markers', marker=dict(color=NIPPON_RURI, size=5, opacity=0.5),
                     name='Daily observations'
                 ))
                 slope_h, intercept_h, r_h, p_h, se_h = stats.linregress(df_clean['Ret_H'], df_clean['Ret_Spread'])
@@ -771,8 +1663,8 @@ with tab3:
                     high_vals = [metrics_high['Corr(A,H)'], metrics_high['Corr(Spread,A)'], metrics_high['Corr(Spread,H)']]
                     low_vals = [metrics_low['Corr(A,H)'], metrics_low['Corr(Spread,A)'], metrics_low['Corr(Spread,H)']]
                     
-                    fig_regime.add_trace(go.Bar(name='High Vol', x=metrics_names, y=high_vals, marker_color='#9E3D3F'))
-                    fig_regime.add_trace(go.Bar(name='Low Vol', x=metrics_names, y=low_vals, marker_color='#2A5CAA'))
+                    fig_regime.add_trace(go.Bar(name='High Vol', x=metrics_names, y=high_vals, marker_color=NIPPON_SUOH))
+                    fig_regime.add_trace(go.Bar(name='Low Vol', x=metrics_names, y=low_vals, marker_color=NIPPON_RURI))
                     fig_regime.update_layout(barmode='group', template="seaborn", height=300,
                                             title="Correlation by Volatility Regime")
                     st.plotly_chart(fig_regime, use_container_width=True)
@@ -820,13 +1712,13 @@ with tab3:
                                           subplot_titles=("Rolling Betas (β_A and β_H)", "Rolling R²"))
             
             fig_roll_beta.add_trace(go.Scatter(x=roll_dates, y=rolling_beta_a, name='β_A (A-Share)', 
-                                               line=dict(color='#2A5CAA', width=1.5)), row=1, col=1)
+                                               line=dict(color=NIPPON_SUOH, width=1.5)), row=1, col=1)
             fig_roll_beta.add_trace(go.Scatter(x=roll_dates, y=rolling_beta_h, name='β_H (H-Share)', 
-                                               line=dict(color='#9E3D3F', width=1.5)), row=1, col=1)
+                                               line=dict(color=NIPPON_RURI, width=1.5)), row=1, col=1)
             fig_roll_beta.add_hline(y=0, line_dash="dot", line_color="gray", row=1, col=1)
             
             fig_roll_beta.add_trace(go.Scatter(x=roll_dates, y=rolling_r2, name='R²', 
-                                               fill='tozeroy', line=dict(color='#838B0D', width=1)), row=2, col=1)
+                                               fill='tozeroy', line=dict(color=NIPPON_KOKE, width=1)), row=2, col=1)
             
             fig_roll_beta.update_layout(height=500, template="seaborn", hovermode="x unified")
             fig_roll_beta.update_yaxes(title_text="Beta", row=1, col=1)
